@@ -18,8 +18,6 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 # 90=Hopper
 set(CMAKE_CUDA_ARCHITECTURES 75 86 89 90)
 
-# set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
 message(STATUS "========================")
 message(STATUS "Project: ${PROJECT_NAME}")
 message(STATUS "Targeting CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -27,6 +25,8 @@ message(STATUS "Targeting CUDA Architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 add_subdirectory(third_party/linenoise)
 add_subdirectory(third_party/spdlog)
 add_subdirectory(third_party/cli11)
+add_subdirectory(third_party/jsoncpp)
+include_directories(src)
 
 add_executable(
     ToyInfer
@@ -39,6 +39,7 @@ target_link_libraries(
     CUDA::cublas
     CLI11::CLI11
     spdlog::spdlog
+    jsoncpp:jsoncpp
     linenoise
 )
 
