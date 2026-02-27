@@ -1,0 +1,11 @@
+CompileFlags:
+  Remove:
+    - "-forward-unknown-to-host-compiler"
+    - "--generate-code=*"
+    - "--expt-relaxed-constexpr"
+  Add:
+    - "-I/mnt/n0/rjc/ToyInfer/third_party/cli11/include"
+    - "-I/mnt/n0/rjc/ToyInfer/third_party/jsoncpp/include"
+    - "-I/mnt/n0/rjc/ToyInfer/third_party/spdlog/include"
+    - "-I/mnt/n0/rjc/ToyInfer/third_party/linenoise"
+    - "-I/mnt/n0/rjc/ToyInfer/src"
