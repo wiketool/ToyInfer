@@ -4,3 +4,6 @@
 [submodule "third_party/cli11"]
 	path = third_party/cli11
 	url = https://github.com/CLIUtils/CLI11.git
+[submodule "third_party/jsoncpp"]
+	path = third_party/jsoncpp
+	url = https://github.com/open-source-parsers/jsoncpp.git
