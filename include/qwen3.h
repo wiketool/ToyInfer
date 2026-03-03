@@ -12,12 +12,6 @@
 namespace toyinfer {
 
 class Qwen3 {
-   public:
-    Qwen3(const Options& options,const LLMConfig& config);
-    ~Qwen3();
-    void load_weights();
-
-   private:
     struct TensorMeta {
         const char* name;
         uint64_t offset;
@@ -43,15 +37,23 @@ class Qwen3 {
         FFN ffn;
         Attention attention;
     };
+
+   public:
+    Qwen3(const Options& options, const LLMConfig& config);
+    ~Qwen3();
+    void load_weights();
+
+    bf16* lmhead_d;
+    bf16* embed_tokens_d;
+    Layer* layer;
+    bf16* norm_d;
+
+   private:
     const static TensorMeta TENSORMETA[];
     std::filesystem::path model_dir;
     uint32_t layers;
 
     char* weight_d;  // 指向GPU中的参数内存起始地址
-    bf16* lmhead_d;
-    bf16* embed_tokens_d;
-    Layer* layer;
-    bf16* norm_d;
 };
 
 }  // namespace toyinfer
