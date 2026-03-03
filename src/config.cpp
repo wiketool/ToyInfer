@@ -3,6 +3,7 @@
 #include "config.h"
 
 #include <fstream>
+#include <stdexcept>
 
 #include "json/json.h"
 
@@ -35,5 +36,9 @@ LLMConfig::LLMConfig(const Options& options) {
     max_seq_len = root["max_position_embeddings"].asInt();
     rms_norm_eps = root["rms_norm_eps"].asFloat();
     rope_theta = root["rope_theta"].asFloat();
+
+    if((head_dim & 1) != 0){
+        throw std::runtime_error("HEAD_DIM 必须是偶数");
+    }
 };
 };  // namespace toyinfer
