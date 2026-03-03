@@ -18,6 +18,7 @@ from jinja2 import Template
 # 通过将这些不安全的字节映射到256开始的Unicode字符上，可以确保每个字节都有一个唯一且安全的Unicode表示，从而避免了编码问题。
 # 如果不这样做，在训练过程中可能会遇到正则表达式错误，或者vocab无法写入json的问题。
 
+
 # 将0-255的字节映射到可见的Unicode字符上，确保所有字节都能安全地表示为Unicode字符
 def bytes_to_unicode():
     """Reference GPT-2 byte→Unicode map."""
@@ -36,11 +37,12 @@ def bytes_to_unicode():
             n += 1
     return dict(zip(bs, map(chr, cs)))
 
+
 def internal_to_bytes(U2B, token_str: str) -> bytes:
-    return b''.join(
-        bytes([U2B[ch]]) if ch in U2B else ch.encode('utf-8')
-        for ch in token_str
+    return b"".join(
+        bytes([U2B[ch]]) if ch in U2B else ch.encode("utf-8") for ch in token_str
     )
+
 
 def build_tokenizer(model, output_dir):
     B2U = bytes_to_unicode()
@@ -60,7 +62,10 @@ def build_tokenizer(model, output_dir):
     merges = tokenizer_data["model"]["merges"]
 
     # Build merge rank table
-    merge_rank = {''.join(tuple(merge if isinstance(merge, list) else merge.split())): i for i, merge in enumerate(merges)}
+    merge_rank = {
+        "".join(tuple(merge if isinstance(merge, list) else merge.split())): i
+        for i, merge in enumerate(merges)
+    }
 
     # Create pseudo-score dictionary
     # Tokens from initial vocab get score 0 (unmerged tokens)
@@ -80,45 +85,101 @@ def build_tokenizer(model, output_dir):
     tokenizer_path = os.path.join(output_dir, "tokenizer.bin")
 
     with open(tokenizer_path, "wb") as out_f:
-        out_f.write(struct.pack("<I", len(all_tokens)))       # 4 bytes: number of tokens
+        out_f.write(struct.pack("<I", len(all_tokens)))  # 4 bytes: number of tokens
 
         for id, token in enumerate(all_tokens):
             token_bytes = internal_to_bytes(U2B, token)
-            out_f.write(struct.pack("f", pseudo_scores[token])) # 4 bytes: merge score
-            out_f.write(struct.pack("<I", len(token_bytes))) # 4 bytes: token length
-            out_f.write(token_bytes)                         # UTF-8 bytes
+            out_f.write(struct.pack("<I", len(token_bytes)))  # 4 bytes: token length
+            out_f.write(token_bytes)  # UTF-8 bytes
 
+    merges_process = []
+    for merge in merges:
+        item = []
+        if isinstance(merge, str):
+            parts = merge.split(" ")
+            if len(parts) != 2:  # check
+                raise ValueError(f"Invalid merge format: {merge}")
+            item = [parts[0], parts[1], "".join(parts)]
+        elif isinstance(merge, list) and len(merge) == 2:
+            item = [merge[0], merge[1], "".join(merge)]
+        else:
+            raise ValueError(f"Invalid merge format: {merge}")
+
+        def token_to_id(token):
+            if token in vocab:
+                return vocab.get(token)
+            else:
+                raise ValueError(f"Token '{token}' not found in vocab.")
+
+        item = [token_to_id(token) for token in item]
+        merges_process.append(item)
+    print(f"Processed {len(merges_process)} merges.")
+    merge_path = os.path.join(output_dir, "merges.bin")
+    with open(merge_path, "wb") as out_f:
+        out_f.write(struct.pack("<I", len(merges_process)))  # 4 bytes: number of merges
+        for merge in merges_process:
+            out_f.write(struct.pack("<I", merge[0]))  # 4 bytes: first token ID
+            out_f.write(struct.pack("<I", merge[1]))  # 4 bytes: second token ID
+            out_f.write(struct.pack("<I", merge[2]))  # 4 bytes: merged token ID
     print(f"Written tokenizer model to {tokenizer_path}")
+
 
 def build_prompts(model, output_dir):
     template = Template(model.tokenizer.chat_template)
 
     # Template 1: User
     messages = [{"role": "user", "content": "%s"}]
-    rendered_prompt = template.render(messages=messages, add_generation_prompt=True, enable_thinking=False)
-    with open(os.path.join(output_dir, 'template_user.txt'), 'w', encoding='utf-8', newline='') as f:
+    rendered_prompt = template.render(
+        messages=messages, add_generation_prompt=True, enable_thinking=False
+    )
+    with open(
+        os.path.join(output_dir, "template_user.txt"), "w", encoding="utf-8", newline=""
+    ) as f:
         f.write(rendered_prompt)
 
     # Template 2: User with Thinking
-    rendered_prompt = template.render(messages=messages, add_generation_prompt=True, enable_thinking=True)
-    with open(os.path.join(output_dir, 'template_user_thinking.txt'), 'w', encoding='utf-8', newline='') as f:
+    rendered_prompt = template.render(
+        messages=messages, add_generation_prompt=True, enable_thinking=True
+    )
+    with open(
+        os.path.join(output_dir, "template_user_thinking.txt"),
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as f:
         f.write(rendered_prompt)
 
     # Template 3: System + User
     messages = [{"role": "system", "content": "%s"}, {"role": "user", "content": "%s"}]
-    rendered_prompt = template.render(messages=messages, add_generation_prompt=True, enable_thinking=False)
-    with open(os.path.join(output_dir, 'template_system.txt'), 'w', encoding='utf-8', newline='') as f:
+    rendered_prompt = template.render(
+        messages=messages, add_generation_prompt=True, enable_thinking=False
+    )
+    with open(
+        os.path.join(output_dir, "template_system.txt"),
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as f:
         f.write(rendered_prompt)
 
     # Template 4: System + User with Thinking
-    rendered_prompt = template.render(messages=messages, add_generation_prompt=True, enable_thinking=True)
-    with open(os.path.join(output_dir, 'template_system_thinking.txt'), 'w', encoding='utf-8', newline='') as f:
+    rendered_prompt = template.render(
+        messages=messages, add_generation_prompt=True, enable_thinking=True
+    )
+    with open(
+        os.path.join(output_dir, "template_system_thinking.txt"),
+        "w",
+        encoding="utf-8",
+        newline="",
+    ) as f:
         f.write(rendered_prompt)
 
     print(f"Written prompt templates to '{output_dir}'")
 
+
 # -----------------------------------------------------------------------------
 # Load / import functions
+
 
 def load_tokenizer_and_config(model_path):
     """Loads only the tokenizer and config, not the full model weights."""
@@ -136,34 +197,42 @@ def load_tokenizer_and_config(model_path):
 
     model_mock = SimpleNamespace()
     model_mock.tokenizer = tokenizer
-    model_mock.bos_token_id = hf_config.bos_token_id if hasattr(hf_config, "bos_token_id") else 0
-    model_mock.eos_token_id = hf_config.eos_token_id if hasattr(hf_config, "eos_token_id") else 0
-    
+    model_mock.bos_token_id = (
+        hf_config.bos_token_id if hasattr(hf_config, "bos_token_id") else 0
+    )
+    model_mock.eos_token_id = (
+        hf_config.eos_token_id if hasattr(hf_config, "eos_token_id") else 0
+    )
+
     print("Successfully loaded tokenizer and config.")
     return model_mock
+
 
 def read_safetensor_header(filepath):
     """
     原生的读取 safetensors 头部数据，不依赖外部库。
     """
-    with open(filepath, 'rb') as f:
+    with open(filepath, "rb") as f:
         # 读取前 8 字节，这是一个无符号的 64 位整型（小端序），代表 JSON 头部的长度
         header_len_bytes = f.read(8)
         if not header_len_bytes:
             return {}
-        header_len = struct.unpack('<Q', header_len_bytes)[0]
-        
+        header_len = struct.unpack("<Q", header_len_bytes)[0]
+
         # 读取这 N 个字节并解析为 JSON
         header_json_bytes = f.read(header_len)
-        header = json.loads(header_json_bytes.decode('utf-8'))
-        
+        header = json.loads(header_json_bytes.decode("utf-8"))
+
     # safetensors 通常自带一个 __metadata__ key，我们不需要它
-    if '__metadata__' in header:
-        del header['__metadata__']
-        
+    if "__metadata__" in header:
+        del header["__metadata__"]
+
     return header
 
-def export_safetensors_config(model_dir: str, output_filepath="safetensors_config.json"):
+
+def export_safetensors_config(
+    model_dir: str, output_filepath="safetensors_config.json"
+):
     """
     接受模型文件夹路径，扫描并导出详细的张量信息。
     """
@@ -177,16 +246,16 @@ def export_safetensors_config(model_dir: str, output_filepath="safetensors_confi
     # 情况 A: 分片模型 (存在 index.json)
     if index_file.exists():
         print(f"[INFO] 发现分片索引文件: {index_file.name}")
-        with open(index_file, 'r', encoding='utf-8') as f:
+        with open(index_file, "r", encoding="utf-8") as f:
             index_data = json.load(f)
-        
+
         weight_map = index_data.get("weight_map", {})
-        
+
         # 将张量先按所在的文件分组，避免同一个文件被重复打开多次
         files_to_tensors = {}
         for tensor_name, filename in weight_map.items():
             files_to_tensors.setdefault(filename, []).append(tensor_name)
-            
+
         file_base_offset = 0
         # 按照文件名排序，确保按照固定的文件顺序拼接
         for filename in sorted(files_to_tensors.keys()):
@@ -194,9 +263,9 @@ def export_safetensors_config(model_dir: str, output_filepath="safetensors_confi
             if not filepath.exists():
                 print(f"[WARN] 权重文件不存在跳过: {filename}")
                 continue
-                
+
             header = read_safetensor_header(filepath)
-            
+
             max_offset = 0
             for tensor_name in files_to_tensors[filename]:
                 if tensor_name in header:
@@ -204,7 +273,7 @@ def export_safetensors_config(model_dir: str, output_filepath="safetensors_confi
                     config_dict[tensor_name] = {
                         "name": tensor_name,
                         "offset": file_base_offset + info["data_offsets"][0],
-                        "size": info["data_offsets"][1] - info["data_offsets"][0]
+                        "size": info["data_offsets"][1] - info["data_offsets"][0],
                     }
                     if info["data_offsets"][1] > max_offset:
                         max_offset = info["data_offsets"][1]
@@ -217,44 +286,49 @@ def export_safetensors_config(model_dir: str, output_filepath="safetensors_confi
         safetensor_files = sorted(list(model_path.glob("*.safetensors")))
         if not safetensor_files:
             raise FileNotFoundError(f"No .safetensors found in {model_dir}")
-        
+
         print(f"[INFO] 发现 {len(safetensor_files)} 个 safetensors 文件")
         file_base_offset = 0
         for file in safetensor_files:
             header = read_safetensor_header(file)
             filename = file.name
-            
+
             max_offset = 0
             for tensor_name, info in header.items():
                 config_dict[tensor_name] = {
                     "name": tensor_name,
                     "offset": file_base_offset + info["data_offsets"][0],
-                    "size": info["data_offsets"][1] - info["data_offsets"][0]
+                    "size": info["data_offsets"][1] - info["data_offsets"][0],
                 }
                 if info["data_offsets"][1] > max_offset:
                     max_offset = info["data_offsets"][1]
             # 累加当前文件的数据块长度
             file_base_offset += max_offset
-                
+
     # 按照计算出的全局递增 offset 排序
     sorted_config = sorted(config_dict.values(), key=lambda x: x["name"])
-    
+
     # 写入用于 C++ 构造初始化的代码片段
     out_path = Path(output_filepath).with_suffix(".inc")
-    with open(out_path, 'w', encoding='utf-8') as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         for item in sorted_config:
             f.write(f'    {{"{item["name"]}", {item["offset"]}, {item["size"]}}},\n')
-            
+
     print(f"[SUCCESS] 成功提取了 {len(sorted_config)} 个权重的位置信息！")
     print(f"[SUCCESS] C++ 初始化配置已导出至: {out_path.absolute()}")
-    
+
     return sorted_config
 
 
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate tokenizer.bin and template files")
-    parser.add_argument("model_path", type=str, help="Path to the local Hugging Face model directory (used for both input and output).")
+    parser = argparse.ArgumentParser(
+        description="Generate tokenizer.bin and template files"
+    )
+    parser.add_argument(
+        "model_path",
+        type=str,
+        help="Path to the local Hugging Face model directory (used for both input and output).",
+    )
     args = parser.parse_args()
 
     model_info = load_tokenizer_and_config(args.model_path)
@@ -262,4 +336,6 @@ if __name__ == "__main__":
     if model_info:
         build_tokenizer(model_info, args.model_path)
         build_prompts(model_info, args.model_path)
-        export_safetensors_config(args.model_path, os.path.join(args.model_path, "safetensors_config.json"))
+        export_safetensors_config(
+            args.model_path, os.path.join(args.model_path, "safetensors_config.json")
+        )
