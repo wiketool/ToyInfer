@@ -12,6 +12,7 @@
 namespace toyinfer {
 
 class Qwen3 {
+   public:
     struct TensorMeta {
         const char* name;
         uint64_t offset;
@@ -37,8 +38,6 @@ class Qwen3 {
         FFN ffn;
         Attention attention;
     };
-
-   public:
     Qwen3(const Options& options, const LLMConfig& config);
     ~Qwen3();
     void load_weights();

@@ -10,8 +10,9 @@ namespace toyinfer {
 
 class Transformer {
     struct State {
-        bf16* hidden_d; // hidden state, [hidden_size]
-        float* inv_freq_d; // rope kernel, [head_dim / 2]
+        bf16* normd_hidden_d;     // hidden state, [hidden_size]
+        float* sum_d;       // dim = 1
+        float* inv_freq_d;  // rope kernel, [head_dim / 2]
         void alloc(const LLMConfig& llmconfig);
         void free();
     };
@@ -23,6 +24,7 @@ class Transformer {
 
    public:
     Transformer(const Options& options, const LLMConfig& config);
-    void forward(uint32_t token_id ,uint32_t pos, std::unique_ptr<float[]> logits);
+    void forward(uint32_t token_id, uint32_t pos,
+                 std::unique_ptr<float[]> logits);
 };
 }  // namespace toyinfer
