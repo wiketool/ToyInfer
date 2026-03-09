@@ -9,6 +9,8 @@
 
 namespace toyinfer {
 
+constexpr uint32_t NUM_THREADS = 256;
+
 LLMConfig::LLMConfig(const Options& options) {
     // 从 JSON 文件加载配置
     std::string config_path = std::string(options.model_dir) + "/config.json";
@@ -37,7 +39,7 @@ LLMConfig::LLMConfig(const Options& options) {
     rms_norm_eps = root["rms_norm_eps"].asFloat();
     rope_theta = root["rope_theta"].asFloat();
 
-    if((head_dim & 1) != 0){
+    if ((head_dim & 1) != 0) {
         throw std::runtime_error("HEAD_DIM 必须是偶数");
     }
 };

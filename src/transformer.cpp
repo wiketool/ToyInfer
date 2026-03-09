@@ -13,7 +13,8 @@
 namespace toyinfer {
 
 void Transformer::State::alloc(const LLMConfig& llmconfig) {
-    cudaMalloc(&hidden_d, sizeof(bf16) * llmconfig.hidden_size);
+    cudaMalloc(&normd_hidden_d, sizeof(bf16) * llmconfig.hidden_size);
+    cudaMalloc(&sum_d, sizeof(float));
     cudaMalloc(&inv_freq_d, sizeof(float) * llmconfig.head_dim / 2);
 }
 
@@ -28,13 +29,17 @@ Transformer::Transformer(const Options& options, const LLMConfig& config)
 void Transformer::forward(uint32_t token_id, uint32_t pos,
                           std::unique_ptr<float[]> logits) {
     // 预计算theta
-    launch_precompute_inv_freq_kernel(state.inv_freq_d, pos,
-                                      llmconfig.rope_theta);
-    state.hidden_d = qwen3_.embed_tokens_d + llmconfig.hidden_size * token_id;
-
+    precompute_theta_f32(state.inv_freq_d, pos, llmconfig.rope_theta);
+    const bf16* embedding_ptr =
+        qwen3_.embed_tokens_d + llmconfig.hidden_size * token_id;
     // decoder layer
     for (int i = 0; i < llmconfig.num_hidden_layers; ++i) {
-        
+        const Qwen3::Layer* layer_ptr = &qwen3_.layer[i];
+        const bf16* norm_weight = layer_ptr->input_layernorm_d;
+        rmsnorm_bf16(embedding_ptr, norm_weight, state.normd_hidden_d, state.sum_d,
+                     llmconfig.rms_norm_eps, llmconfig.hidden_size);
+
+
     }
 }
 }  // namespace toyinfer
