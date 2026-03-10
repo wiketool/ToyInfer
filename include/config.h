@@ -3,6 +3,7 @@
 #include "options.h"
 
 namespace toyinfer {
+constexpr uint32_t NUM_THREADS = 256;
 
 class LLMConfig {
    public:

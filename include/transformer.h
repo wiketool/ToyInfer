@@ -10,15 +10,22 @@ namespace toyinfer {
 
 class Transformer {
     struct State {
-        bf16* normd_hidden_d;     // hidden state, [hidden_size]
-        float* sum_d;       // dim = 1
-        float* inv_freq_d;  // rope kernel, [head_dim / 2]
-        void alloc(const LLMConfig& llmconfig);
+        bf16* hidden_d;  // hidden state, [hidden_size]
+        float* sum_d;          // dim = 1
+        float* inv_freq_d;     // rope kernel, [head_dim / 2]
+
+        // for attention
+        bf16* q_d;
+        bf16* key_cache_d;
+        bf16* val_cache_d;
+
+        void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
     };
 
    private:
     const LLMConfig& llmconfig;
+    const Options& options;
     Qwen3 qwen3_;
     State state;
 
