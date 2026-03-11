@@ -15,8 +15,7 @@
         }                                                                      \
     } while (0)
 
-#define FETCH_BF162_RO(addr) \
-    reinterpret_cast<const bf162* __restrict__>(addr)[0]
+#define FETCH_BF162_RO(addr) reinterpret_cast<const bf162*>(addr)[0]
 
 namespace toyinfer {
 
