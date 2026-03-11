@@ -161,7 +161,7 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
     if (idx < head_dim) {
         reg_input.x = reg_input.x * multi_val * reg_weight.x;
         reg_input.y = reg_input.y * multi_val * reg_weight.y;
-        reinterpret_cast<bf162*>(&output[idx])[0] =
+        reinterpret_cast<bf162*>(&output[offset + idx])[0] =
             __float22bfloat162_rn(reg_input);
     }
 }
