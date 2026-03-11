@@ -133,7 +133,7 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
     const uint32_t warp_id = tid / 32;
     const uint32_t lane_id = tid % 32;
     const uint32_t head_idx = blockIdx.x;
-    const uint32_t offset = blockIdx.x * head_dim;
+    const uint32_t offset = head_idx * head_dim;
     const uint32_t idx = tid * 2;
     float reg_sum = 0.0f;
     float2 reg_input, reg_weight;
