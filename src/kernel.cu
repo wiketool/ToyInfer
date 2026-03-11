@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 #include <iostream>
 
@@ -52,6 +53,8 @@ __device__ float reduce_sum_f32_warp(float val) {
 
 __global__ void reduce_sum_bf16x2_kernel(const bf16* __restrict__ input,
                                          float* sum, const uint32_t size) {
+    assert(size % 2 == 0);
+    assert(blockDim.x % 2 == 0);
     __shared__ float s_warps_sum[32];
     const uint32_t offset = blockDim.x * blockIdx.x * 2;
     const uint32_t num_warps = (blockDim.x + 31) / 32;
@@ -85,6 +88,7 @@ __global__ void rmsnorm_bf16x2_kernel(const bf16* __restrict__ input,
                                       bf16* output, const float* sum,
                                       const float rms_norm_eps,
                                       const uint32_t size) {
+    assert(size % 2 == 0);
     const uint32_t tid = threadIdx.x;
     const uint32_t offset = blockDim.x * blockIdx.x * 2;
     float2 input_f32x2;
@@ -126,6 +130,8 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
                                             bf16* output,
                                             const float rms_norm_eps,
                                             const uint32_t head_dim) {
+    assert(head_dim % 2 == 0);
+    assert(blockDim.x % 32 == 0);
     __shared__ float s_warps_sum[32];
     __shared__ float multi_val;
     const uint32_t tid = threadIdx.x;
@@ -176,12 +182,13 @@ void multi_rmsnorm_bf16(const bf16* input, const bf16* __restrict__ weight,
     CUDA_CHECK(cudaGetLastError());
 }
 
-// one block for one row, 函数假设block大小等于row，未做边界判断
+// one block for one row, 函数假设nums_block等于row，未做边界判断
 template <const uint32_t NUM_THREADS>
 __global__ void gemv_bf16_kernel(const bf16* __restrict__ W,
                                  const bf16* __restrict__ x,
                                  bf16* __restrict__ y, const uint32_t M,
                                  const uint32_t N) {
+    assert(NUM_THREADS % 32 == 0);
     __shared__ float s_warps_sum[32];
     const uint32_t tid = threadIdx.x;
     const uint32_t num_warps = (NUM_THREADS + 31) / 32;
@@ -228,6 +235,7 @@ void attn_single_proj_bf16(const bf16* __restrict__ W,
 __global__ void rope_bf16x2_kernel(bf16* qk_ptr,
                                    const float* __restrict__ inv_freq,
                                    uint32_t pos, const uint32_t head_dim) {
+    assert(head_dim % 2 == 0);
     const uint32_t tid = threadIdx.x;
     const uint32_t freq_idx = threadIdx.x;
     const uint32_t offset = blockIdx.x * head_dim;
