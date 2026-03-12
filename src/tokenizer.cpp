@@ -312,6 +312,13 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
     delete[] token_buffer;
 }
 
+const char* Tokenizer::decode(const uint32_t token_ids) {
+    if (token_ids < vocab_size_) {
+        return vocab_[token_ids];
+    }
+    return nullptr;
+}
+
 void Tokenizer::render_prompt(std::unique_ptr<char[]>& prompt,
                               const char* user_prompt,
                               const char* system_prompt) {

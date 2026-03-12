@@ -31,7 +31,7 @@ class Tokenizer {
 
     void encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
                 uint32_t& token_count);
-    void decode(const uint32_t token_ids);
+    const char* decode(const uint32_t token_ids);
     void render_prompt(std::unique_ptr<char[]>& prompt, const char* user_prompt,
                        const char* system_prompt);
 
@@ -39,7 +39,7 @@ class Tokenizer {
     struct Token {
         uint32_t id;
         char* text;
-    }* token_index_ = nullptr;  // 词表索引，大小为 vocab_size_
+    }* token_index_ = nullptr;  // 词表索引，大小为 vocab_size_，相比于原词表，这个位于连续地址空间，可以二分搜索
 
     std::filesystem::path model_dir;
     MergeRank merge_rank;
