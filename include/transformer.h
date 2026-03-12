@@ -11,13 +11,26 @@ namespace toyinfer {
 class Transformer {
     struct State {
         bf16* hidden_d;  // hidden state, [hidden_size]
-        float* sum_d;          // dim = 1
-        float* inv_freq_d;     // rope kernel, [head_dim / 2]
+        bf16* residual_d;
+        bf16* x_d;
+
+        float* sum_d;       // dim = 1
+        float* inv_freq_d;  // rope kernel, [head_dim / 2]
 
         // for attention
         bf16* q_d;
         bf16* key_cache_d;
         bf16* val_cache_d;
+        float* score;  // [num_atten_heads, MAX_SEQ_LEN]
+        float* o_buffer_d;
+        bf16* o_d;
+
+        // mlp
+        bf16* gate_d;
+        bf16* up_d;
+        bf16* intermedia_d;
+        // logits
+        float* logits_d;
 
         void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
