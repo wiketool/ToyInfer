@@ -24,11 +24,11 @@ void Transformer::State::alloc(const Options& options,
     cudaMalloc(&key_cache_d, sizeof(bf16) * llmconfig.num_hidden_layers *
                                  options.max_seq_len *
                                  llmconfig.num_key_value_heads *
-                                 llmconfig.num_attention_heads);
+                                 llmconfig.head_dim);
     cudaMalloc(&val_cache_d, sizeof(bf16) * llmconfig.num_hidden_layers *
                                  options.max_seq_len *
                                  llmconfig.num_key_value_heads *
-                                 llmconfig.num_attention_heads);
+                                 llmconfig.head_dim);
     cudaMalloc(&score, sizeof(float) * llmconfig.num_attention_heads *
                            options.max_seq_len);
     cudaMalloc(&o_buffer_d, sizeof(float) * llmconfig.num_attention_heads *
@@ -65,11 +65,12 @@ Transformer::Transformer(const Options& options, const LLMConfig& config)
 }
 
 void Transformer::forward(uint32_t token_id, uint32_t pos,
-                          std::unique_ptr<float[]> logits_h) {
+                          std::unique_ptr<float[]>& logits_h) {
     const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
     const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
     // 预计算theta
-    precompute_freq_f32(state.inv_freq_d, pos, llmconfig.rope_theta);
+    precompute_freq_f32(state.inv_freq_d, llmconfig.head_dim,
+                        llmconfig.rope_theta);
     const bf16* embedding_ptr =
         qwen3_.embed_tokens_d + llmconfig.hidden_size * token_id;
     cudaMemcpy(state.hidden_d, embedding_ptr,
@@ -145,7 +146,7 @@ void Transformer::forward(uint32_t token_id, uint32_t pos,
         // down proj
         gemv_proj_bf16<NUM_THREADS>(
             layer_ref.ffn.down_proj_d, state.intermedia_d, state.hidden_d,
-            llmconfig.intermediate_size, llmconfig.hidden_size);
+            llmconfig.hidden_size, llmconfig.intermediate_size);
         residual_add_bf16<NUM_THREADS>(state.residual_d, state.hidden_d,
                                        llmconfig.hidden_size);
     }

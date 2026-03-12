@@ -3,8 +3,8 @@
 #include <iostream>
 
 #include "cuda_bf16.h"
-#include "math_constants.h"
 #include "kernel_warpper.h"
+#include "math_constants.h"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -42,6 +42,7 @@ void residual_add_bf16(const bf16* __restrict__ residual,
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
     add_bf16_kernel<<<grid_dim, block_dim>>>(residual, hidden_state, size);
+    CUDA_CHECK(cudaGetLastError());
 };
 
 __global__ void precompute_freq_kernel(float* inv_freq_d, const int head_dim,
@@ -54,8 +55,8 @@ __global__ void precompute_freq_kernel(float* inv_freq_d, const int head_dim,
 
 void precompute_freq_f32(float* inv_freq_d, const int head_dim,
                          const float theta) {
-    dim3 block_dim = 64;
-    dim3 grid_dim = ((head_dim / 2) + block_dim.x - 1) / block_dim.x;
+    dim3 block_dim = {64};
+    dim3 grid_dim = {((head_dim / 2) + block_dim.x - 1) / block_dim.x};
     precompute_freq_kernel<<<grid_dim, block_dim>>>(inv_freq_d, head_dim,
                                                     theta);
     CUDA_CHECK(cudaGetLastError());
@@ -159,6 +160,7 @@ void rmsnorm_bf16(const bf16* __restrict__ input,
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
     cudaMemset(sum, 0, sizeof(float));
+    CUDA_CHECK(cudaGetLastError());
     reduce_sum_bf16x2_kernel<<<grid_dim, block_dim>>>(input, sum, size);
     CUDA_CHECK(cudaGetLastError());
     rmsnorm_bf16x2_kernel<<<grid_dim, block_dim>>>(input, weight, output, sum,
@@ -256,7 +258,7 @@ __global__ void gemv_bf16_kernel(const bf16* __restrict__ W,
         reg_sum = reduce_sum_f32_warp(reg_sum);
     }
     if (tid == 0) {
-        y[row] = __bfloat162float(reg_sum);
+        y[row] = __float2bfloat16(reg_sum);
     }
 }
 
@@ -316,7 +318,7 @@ void gemv_proj_bf162float(const bf16* __restrict__ W,
                           const uint32_t N) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{M};
-    gemv_bf16_kernel<NUM_THREADS>
+    gemv_bf162float_kernel<NUM_THREADS>
         <<<grid_dim, block_dim>>>(W, hidden_states, y, M, N);
     CUDA_CHECK(cudaGetLastError());
 }
@@ -484,8 +486,8 @@ __global__ void apply_score2v_f32_kernel(
         reg_sum.x += reg_score * reg_v.x;
         reg_sum.y += reg_score * reg_v.y;
     }
-    atomicAdd(&o[head_idx * heads_dim + tid * 2], reg_sum.x);
-    atomicAdd(&o[head_idx * heads_dim + tid * 2 + 1], reg_sum.y);
+    atomicAdd(&o[head_offset + tid * 2], reg_sum.x);
+    atomicAdd(&o[head_offset + tid * 2 + 1], reg_sum.y);
 }
 
 template <const uint32_t NUM_THREADS, const uint32_t TILE_SEQ>
@@ -497,23 +499,28 @@ void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
                     const uint32_t max_seq_len) {
     dim3 block_dim, grid_dim;
     cudaMemset(score, 0, sizeof(float) * num_q_heads * max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
     // q*K
     block_dim = {NUM_THREADS};
     grid_dim = {pos + 1};
     gqa_qk_gemv_bf16_kernel<NUM_THREADS><<<grid_dim, block_dim>>>(
         Q, Ks, score, num_q_heads, num_kv_heads, heads_dim, max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
     softmax_f32_kernel<NUM_THREADS>
         <<<grid_dim, block_dim>>>(score, num_q_heads, pos, max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
     block_dim = {heads_dim / 2};
-    grid_dim = {num_q_heads, (pos + TILE_SEQ - 1) / TILE_SEQ};
+    grid_dim = {num_q_heads, (pos + 1 + TILE_SEQ - 1) / TILE_SEQ};
     apply_score2v_f32_kernel<TILE_SEQ>
         <<<grid_dim, block_dim>>>(score, O_buffer, Vs, num_q_heads,
                                   num_kv_heads, heads_dim, pos, max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
     block_dim = {NUM_THREADS};
     grid_dim = {(num_q_heads * heads_dim + block_dim.x * 2 - 1) /
                 (block_dim.x * 2)};
     convert_float22bfloat162<<<grid_dim, block_dim>>>(O_buffer, O,
                                                       num_q_heads * heads_dim);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
@@ -524,7 +531,7 @@ __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
     assert(size % 2 == 0);
     //
     const uint32_t idx = blockDim.x * blockIdx.x * 2 + threadIdx.x * 2;
-    float2 reg_intermedia, reg_gate, reg_up;
+    float2 reg_gate, reg_up;
     if (idx < size) {
         reg_gate = __bfloat1622float2(FETCH_BF162_RO(&gate[idx]));
         reg_up = __bfloat1622float2(FETCH_BF162_RO(&up[idx]));
@@ -543,6 +550,34 @@ void swiglu_bf16x2(const bf16* __restrict__ gate, const bf16* __restrict__ up,
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
     swiglu_bf16x2_kernel<<<grid_dim, block_dim>>>(gate, up, intermedia, size);
+    CUDA_CHECK(cudaGetLastError());
 }
+
+template void residual_add_bf16<256>(const bf16* __restrict__ residual,
+                                     bf16* __restrict__ hidden_state,
+                                     const uint32_t size);
+template void rmsnorm_bf16<256>(const bf16* __restrict__ input,
+                                const bf16* __restrict__ weight, bf16* output,
+                                float* sum, const float rms_norm_eps,
+                                const uint32_t size);
+template void gemv_proj_bf16<256>(const bf16* __restrict__ W,
+                                  const bf16* __restrict__ hidden_states,
+                                  bf16* __restrict__ y, const uint32_t M,
+                                  const uint32_t N);
+
+template void gemv_proj_bf162float<256>(const bf16* __restrict__ W,
+                                        const bf16* __restrict__ hidden_states,
+                                        float* __restrict__ y, const uint32_t M,
+                                        const uint32_t N);
+template void attention_bf16<256, 32>(
+    const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
+    const bf16* __restrict__ Vs, float* __restrict__ score,
+    float* __restrict__ O_buffer, bf16* __restrict__ O,
+    const uint32_t num_q_heads, const uint32_t num_kv_heads,
+    const uint32_t heads_dim, const uint32_t pos, const uint32_t max_seq_len);
+template void swiglu_bf16x2<256>(const bf16* __restrict__ gate,
+                                 const bf16* __restrict__ up,
+                                 bf16* __restrict__ intermedia,
+                                 const uint32_t size);
 
 }  // namespace toyinfer
