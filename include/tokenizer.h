@@ -14,7 +14,7 @@ class MergeRank {
     MergeRank(const std::filesystem::path model_dir);
     ~MergeRank();
     int find_merge_rank(const uint32_t token_a_id,
-                        const uint32_t token_b_idconst, uint32_t& merge_rank);
+                        const uint32_t token_b_id, uint32_t& merge_rank);
     int find_merge_token_id(const uint32_t token_a_id,
                             const uint32_t token_b_idconst,
                             uint32_t& merged_token_id);
