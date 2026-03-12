@@ -47,15 +47,23 @@ void Engine::chat() {
                 token_id = next_token_id;
             }
             transformer.forward(token_id, pos, logits_h);
-            pos++;
             next_token_id = sampler.sample(logits_h);
-            printf("next token id: %d\n", next_token_id);
-            if (next_token_id == llm_config.eos_token_id) {
+            // printf("next token id: %d\n", next_token_id);
+            if ((pos + 1) < token_cnt) {
+                next_token_id = token_ids[pos + 1];
+            }
+            if (next_token_id == llm_config.eos_token_id &&
+                pos >= (token_cnt - 1)) {
+                printf("%d %d\n", pos, token_cnt);
                 assistance_end = true;
             }
-            // printf("%s", tokenizer.decode(next_token_id));
+
+            printf("%s", tokenizer.decode(next_token_id));
+            fflush(stdout);
+            pos++;
         }
         printf("\n");
+        pos = 0;
 
         linenoiseFree(line);
     }

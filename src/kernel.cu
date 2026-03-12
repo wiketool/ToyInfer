@@ -180,7 +180,7 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
     __shared__ float s_warps_sum[32];
     __shared__ float multi_val;
     const uint32_t tid = threadIdx.x;
-    const uint32_t num_warps = (head_dim + 31) / 32;
+    const uint32_t num_warps = (blockDim.x + 31) / 32;
     const uint32_t warp_id = tid / 32;
     const uint32_t lane_id = tid % 32;
     const uint32_t head_idx = blockIdx.x;
@@ -190,7 +190,7 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
     float2 reg_input, reg_weight;
     if (idx < head_dim) {
         reg_input = __bfloat1622float2(FETCH_BF162_RO(&input[offset + idx]));
-        reg_weight = __bfloat1622float2(FETCH_BF162_RO(&weight[offset + idx]));
+        reg_weight = __bfloat1622float2(FETCH_BF162_RO(&weight[idx]));
         reg_sum = fmaf(reg_input.x, reg_input.x, reg_sum);
         reg_sum = fmaf(reg_input.y, reg_input.y, reg_sum);
     }
@@ -508,6 +508,7 @@ void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
     gqa_qk_gemv_bf16_kernel<NUM_THREADS><<<grid_dim, block_dim>>>(
         Q, Ks, score, num_q_heads, num_kv_heads, heads_dim, max_seq_len);
     CUDA_CHECK(cudaGetLastError());
+    grid_dim = {num_q_heads};
     softmax_f32_kernel<NUM_THREADS>
         <<<grid_dim, block_dim>>>(score, num_q_heads, pos, max_seq_len);
     CUDA_CHECK(cudaGetLastError());
