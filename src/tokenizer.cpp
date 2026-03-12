@@ -323,9 +323,10 @@ void Tokenizer::render_prompt(std::unique_ptr<char[]>& prompt,
                               const char* user_prompt,
                               const char* system_prompt) {
     if (system_prompt != nullptr && user_prompt != nullptr) {
+        // 返回的是不含\0的长度
         int prompt_len = snprintf(nullptr, 0, system_prompt_template,
                                   system_prompt, user_prompt);
-        prompt = std::make_unique<char[]>(prompt_len);
+        prompt = std::make_unique<char[]>(prompt_len+1);
         sprintf(prompt.get(), system_prompt_template, system_prompt,
                 user_prompt);
     } else if (user_prompt != nullptr) {
