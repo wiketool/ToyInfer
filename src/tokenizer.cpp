@@ -178,7 +178,7 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
     token_ids = std::make_unique<uint32_t[]>(strlen(text));
     token_count = 0;
     uint32_t token_id = 0;
-    char* token_buffer = new char[max_token_len * 2 + 1];
+    char* token_buffer = new char[max_token_len + 1];
     // scan text, find special token, if not found, split by character and find
     // token id in vocab
     for (const char* ch = text; *ch != '\0'; ch++) {
@@ -224,10 +224,13 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
     struct MergeJob {
         uint32_t merge_rank;
         uint32_t idx;
+        int32_t self_token_id;
         int32_t right_token_id;
-        MergeJob(uint32_t merge_rank_, uint32_t idx_, int32_t right_token_id_) {
+        MergeJob(uint32_t merge_rank_, uint32_t idx_, uint32_t self_token_id_,
+                 int32_t right_token_id_) {
             merge_rank = merge_rank_;
             idx = idx_;
+            self_token_id = self_token_id_;
             right_token_id = right_token_id_;
         }
         bool operator<(const MergeJob& job_b) const {
@@ -237,7 +240,12 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
             return this->merge_rank > job_b.merge_rank;
         }
     };
+    printf("token cnt: %d\n", token_count);
+
     Node* node = new Node[token_count];
+
+    printf("token cnt: %d\n", token_count);
+
     for (int32_t i = 0; i < token_count; i++) {
         node[i].vaild = true;
         node[i].token_id = token_ids[i];
@@ -251,7 +259,7 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
                                        rank) == -1) {
             continue;
         }
-        merge_pq.emplace(rank, i, node[i + 1].token_id);
+        merge_pq.emplace(rank, i, node[i].token_id, node[i + 1].token_id);
     }
     while (merge_pq.empty() == false) {
         MergeJob cur_job = merge_pq.top();
@@ -267,9 +275,14 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
             // 右侧节点执行了合并 A [B C] -> A [D]
             continue;
         }
+        if( cur_job.self_token_id != node[cur_job.idx].token_id){
+            continue;
+        }
+        // A C C -> [A C] C
         uint32_t merged_token_id;
         if (merge_rank.find_merge_token_id(cur->token_id, right->token_id,
                                            merged_token_id) == -1) {
+            printf("%s %s\n", vocab_[cur->token_id], vocab_[right->token_id]);
             throw std::runtime_error("Illegal merge job!");
         }
         cur->token_id = merged_token_id;
@@ -288,7 +301,8 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
             if (merge_rank.find_merge_rank(node[cur->prev].token_id,
                                            node[cur_job.idx].token_id,
                                            rank) == 0) {
-                merge_pq.emplace(rank, cur->prev, node[cur_job.idx].token_id);
+                merge_pq.emplace(rank, cur->prev, node[cur->prev].token_id,
+                                 node[cur_job.idx].token_id);
             }
         }
         // 检查右侧是否可以产生新的merge
@@ -297,7 +311,8 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
             if (merge_rank.find_merge_rank(node[cur_job.idx].token_id,
                                            node[cur->next].token_id,
                                            rank) == 0) {
-                merge_pq.emplace(rank, cur_job.idx, node[cur->next].token_id);
+                merge_pq.emplace(rank, cur_job.idx, node[cur_job.idx].token_id,
+                                 node[cur->next].token_id);
             }
         }
     }
@@ -326,7 +341,7 @@ void Tokenizer::render_prompt(std::unique_ptr<char[]>& prompt,
         // 返回的是不含\0的长度
         int prompt_len = snprintf(nullptr, 0, system_prompt_template,
                                   system_prompt, user_prompt);
-        prompt = std::make_unique<char[]>(prompt_len+1);
+        prompt = std::make_unique<char[]>(prompt_len + 1);
         sprintf(prompt.get(), system_prompt_template, system_prompt,
                 user_prompt);
     } else if (user_prompt != nullptr) {
