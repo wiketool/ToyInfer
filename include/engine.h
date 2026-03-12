@@ -15,5 +15,6 @@ class Engine {
     LLMConfig llm_config;
     Tokenizer tokenizer;
     Transformer transformer;
+    std::unique_ptr<float[]> logits_h;
 };
 }  // namespace toyinfer

@@ -12,7 +12,8 @@ Engine::Engine(const Options& options)
     : options(options),
       llm_config(options),
       tokenizer(options, llm_config),
-      transformer(options, llm_config) {};
+      transformer(options, llm_config),
+      logits_h(std::make_unique<float[]>(llm_config.vocab_size)) {};
 
 void Engine::chat() {
     while (1) {
@@ -33,7 +34,7 @@ void Engine::chat() {
             std::cout << token_ids[i] << " ";
         }
         std::cout << std::endl;
-
+        
         linenoiseFree(line);
     }
 }

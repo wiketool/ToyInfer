@@ -65,7 +65,7 @@ Transformer::Transformer(const Options& options, const LLMConfig& config)
 }
 
 void Transformer::forward(uint32_t token_id, uint32_t pos,
-                          std::unique_ptr<float[]> logits) {
+                          std::unique_ptr<float[]> logits_h) {
     const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
     const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
     // 预计算theta
@@ -152,7 +152,10 @@ void Transformer::forward(uint32_t token_id, uint32_t pos,
     rmsnorm_bf16<NUM_THREADS>(state.hidden_d, qwen3_.norm_d, state.x_d,
                               state.sum_d, llmconfig.rms_norm_eps,
                               llmconfig.hidden_size);
-    // gemv_proj_bf16<NUM_THREADS>(qwen3_.lmhead_d, state.x_d, state.logits_d,
-    //                             llmconfig.vocab_size, llmconfig.hidden_size);
+    gemv_proj_bf162float<NUM_THREADS>(qwen3_.lmhead_d, state.x_d,
+                                      state.logits_d, llmconfig.vocab_size,
+                                      llmconfig.hidden_size);
+    cudaMemcpy(logits_h.get(), state.logits_d,
+               sizeof(float) * llmconfig.vocab_size, cudaMemcpyDeviceToHost);
 }
 }  // namespace toyinfer

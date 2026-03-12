@@ -30,6 +30,11 @@ void gemv_proj_bf16(const bf16* __restrict__ W,
                     const bf16* __restrict__ hidden_states,
                     bf16* __restrict__ y, const uint32_t M, const uint32_t N);
 
+template <const uint32_t NUM_THREADS>
+void gemv_proj_bf162float(const bf16* __restrict__ W,
+                    const bf16* __restrict__ hidden_states,
+                    float* __restrict__ y, const uint32_t M, const uint32_t N);
+
 void rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq, uint32_t pos,
                const uint32_t nums_head, const uint32_t head_dim);
 

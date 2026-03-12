@@ -270,6 +270,56 @@ void gemv_proj_bf16(const bf16* __restrict__ W,
     CUDA_CHECK(cudaGetLastError());
 }
 
+// one block for one row, 函数假设nums_block等于row，未做边界判断
+template <const uint32_t NUM_THREADS>
+__global__ void gemv_bf162float_kernel(const bf16* __restrict__ W,
+                                       const bf16* __restrict__ x,
+                                       float* __restrict__ y, const uint32_t M,
+                                       const uint32_t N) {
+    assert(NUM_THREADS % 32 == 0);
+    assert(N % 2 == 0);
+    __shared__ float s_warps_sum[32];
+    const uint32_t tid = threadIdx.x;
+    const uint32_t num_warps = (NUM_THREADS + 31) / 32;
+    const uint32_t warp_id = threadIdx.x / 32;
+    const uint32_t lane_id = threadIdx.x % 32;
+    const uint32_t row = blockIdx.x;
+    const uint32_t offset = row * N;
+    float reg_sum = 0.0f;
+    float2 reg_w, reg_x;
+
+    for (uint32_t col = tid * 2; col < N; col += NUM_THREADS * 2) {
+        reg_w = __bfloat1622float2(FETCH_BF162_RO(&W[offset + col]));
+        reg_x = __bfloat1622float2(FETCH_BF162_RO(&x[col]));
+        reg_sum = fmaf(reg_w.x, reg_x.x, reg_sum);
+        reg_sum = fmaf(reg_w.y, reg_x.y, reg_sum);
+    }
+    reg_sum = reduce_sum_f32_warp(reg_sum);
+    if (lane_id == 0) {
+        s_warps_sum[warp_id] = reg_sum;
+    }
+    __syncthreads();
+    if (warp_id == 0) {
+        reg_sum = warp_id < num_warps ? s_warps_sum[lane_id] : 0.0f;
+        reg_sum = reduce_sum_f32_warp(reg_sum);
+    }
+    if (tid == 0) {
+        y[row] = reg_sum;
+    }
+}
+
+template <const uint32_t NUM_THREADS>
+void gemv_proj_bf162float(const bf16* __restrict__ W,
+                          const bf16* __restrict__ hidden_states,
+                          float* __restrict__ y, const uint32_t M,
+                          const uint32_t N) {
+    dim3 block_dim{NUM_THREADS};
+    dim3 grid_dim{M};
+    gemv_bf16_kernel<NUM_THREADS>
+        <<<grid_dim, block_dim>>>(W, hidden_states, y, M, N);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 // blockDim = head_dim / 2, gridDim = nums_heads
 __global__ void rope_bf16x2_kernel(bf16* qk_ptr,
                                    const float* __restrict__ inv_freq,
