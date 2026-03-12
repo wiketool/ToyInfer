@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "cuda_bf16.h"
+#include "math_constants.h"
 #include "kernel_warpper.h"
 
 #define CUDA_CHECK(call)                                                       \
