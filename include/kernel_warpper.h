@@ -9,7 +9,9 @@ namespace toyinfer {
 using bf16 = __nv_bfloat16;
 using bf162 = __nv_bfloat162;
 
-void launch_add_kernel(float* a, float* b, float* c, int n);
+template <const uint32_t NUM_THREADS>
+void residual_add_bf16(const bf16* __restrict__ residual,
+                       bf16* __restrict__ hidden_state, const uint32_t size);
 
 void precompute_freq_f32(float* inv_freq, int n, float base);
 
@@ -24,15 +26,21 @@ void multi_rmsnorm_bf16(const bf16* input, const bf16* __restrict__ weight,
                         const uint32_t nums_head, const uint32_t head_dim);
 
 template <const uint32_t NUM_THREADS>
-void attn_single_proj_bf16(const bf16* __restrict__ W,
-                           const bf16* __restrict__ hidden_states,
-                           bf16* __restrict__ y, const uint32_t M,
-                           const uint32_t N);
+void gemv_proj_bf16(const bf16* __restrict__ W,
+                    const bf16* __restrict__ hidden_states,
+                    bf16* __restrict__ y, const uint32_t M, const uint32_t N);
 
 void rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq, uint32_t pos,
                const uint32_t nums_head, const uint32_t head_dim);
 
+template <const uint32_t NUM_THREADS, const uint32_t TILE_SEQ>
 void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
-                    const bf16* __restrict__ Vs, const uint32_t num_q_heads,
-                    const uint32_t num_kv_heads, const uint32_t heads_dim);
+                    const bf16* __restrict__ Vs, float* __restrict__ score,
+                    float* __restrict__ O_buffer, bf16* __restrict__ O,
+                    const uint32_t num_q_heads, const uint32_t num_kv_heads,
+                    const uint32_t heads_dim, const uint32_t pos,
+                    const uint32_t max_seq_len);
+template <const uint32_t NUM_THREADS>
+void swiglu_bf16x2(const bf16* __restrict__ gate, const bf16* __restrict__ up,
+                   bf16* __restrict__ intermedia, const uint32_t size);
 }  // namespace toyinfer

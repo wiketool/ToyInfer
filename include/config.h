@@ -4,6 +4,7 @@
 
 namespace toyinfer {
 constexpr uint32_t NUM_THREADS = 256;
+constexpr uint32_t TILE_SEQ = 32;
 
 class LLMConfig {
    public:
