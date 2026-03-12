@@ -45,6 +45,6 @@ class Transformer {
    public:
     Transformer(const Options& options, const LLMConfig& config);
     void forward(uint32_t token_id, uint32_t pos,
-                 std::unique_ptr<float[]> logits);
+                 std::unique_ptr<float[]>& logits);
 };
 }  // namespace toyinfer
