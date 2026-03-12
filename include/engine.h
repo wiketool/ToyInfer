@@ -4,6 +4,7 @@
 #include "options.h"
 #include "tokenizer.h"
 #include "transformer.h"
+#include "sampler.h"
 namespace toyinfer {
 class Engine {
    public:
@@ -15,6 +16,7 @@ class Engine {
     LLMConfig llm_config;
     Tokenizer tokenizer;
     Transformer transformer;
+    Sampler sampler;
     std::unique_ptr<float[]> logits_h;
 };
 }  // namespace toyinfer
