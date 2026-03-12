@@ -465,12 +465,14 @@ void Qwen3::load_weights() {
         }
         uint64_t meta_len;
         safetensor_ifs.read((char*)&meta_len, sizeof(meta_len));
-        safetensor_ifs.seekg(sizeof(meta_len) + meta_len, std::ios::beg);
+        safetensor_ifs.seekg(0, std::ios::end);
         uint64_t weight_bytes =
             (uint64_t)safetensor_ifs.tellg() - sizeof(meta_len) - meta_len;
+        safetensor_ifs.seekg(sizeof(meta_len) + meta_len, std::ios::beg);
         safetensor_ifs.read(weight_h + cur_offset, weight_bytes);
         SPDLOG_INFO("DONE: read qwen3 weight from {}.",
                     safetensor_path.string());
+        cur_offset += weight_bytes;
     }
     CHECK_CUDA(cudaMalloc(&weight_d, weight_total_byte));
     CHECK_CUDA(cudaMemcpy(weight_d, weight_h, weight_total_byte,
@@ -488,27 +490,27 @@ void Qwen3::load_weights() {
     for (uint32_t i = 0; i < sizeof(layer_map) / sizeof(int); i++) {
         uint32_t layer_idx = layer_map[i];
         uint32_t meta_idx = 1 + i * tensors_per_layer;
-        layer[i].input_layernorm_d =
+        layer[layer_idx].input_layernorm_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 0].offset);
-        layer[i].ffn.down_proj_d =
+        layer[layer_idx].ffn.down_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 1].offset);
-        layer[i].ffn.gate_proj_d =
+        layer[layer_idx].ffn.gate_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 2].offset);
-        layer[i].ffn.up_proj_d =
+        layer[layer_idx].ffn.up_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 3].offset);
-        layer[i].post_attention_layernorm_d =
+        layer[layer_idx].post_attention_layernorm_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 4].offset);
-        layer[i].attention.k_norm_d =
+        layer[layer_idx].attention.k_norm_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 5].offset);
-        layer[i].attention.k_proj_d =
+        layer[layer_idx].attention.k_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 6].offset);
-        layer[i].attention.o_proj_d =
+        layer[layer_idx].attention.o_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 7].offset);
-        layer[i].attention.q_norm_d =
+        layer[layer_idx].attention.q_norm_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 8].offset);
-        layer[i].attention.q_proj_d =
+        layer[layer_idx].attention.q_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 9].offset);
-        layer[i].attention.v_proj_d =
+        layer[layer_idx].attention.v_proj_d =
             (bf16*)(weight_d + TENSORMETA[meta_idx + 10].offset);
     }
 

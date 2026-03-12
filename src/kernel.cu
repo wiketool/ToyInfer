@@ -32,7 +32,9 @@ __global__ void add_bf16_kernel(const bf16* __restrict__ residual,
         bf162 reg_res, reg_hid;
         reg_res = FETCH_BF162_RO(&residual[idx]);
         reg_hid = reinterpret_cast<bf162*>(&hidden_state[idx])[0];
-        hidden_state[idx] = hidden_state[idx] + residual[idx];
+        reg_hid.x = reg_hid.x + reg_res.x;
+        reg_hid.y = reg_hid.y + reg_res.y;
+        reinterpret_cast<bf162*>(&hidden_state[idx])[0] = reg_hid;
     }
 }
 
@@ -254,7 +256,7 @@ __global__ void gemv_bf16_kernel(const bf16* __restrict__ W,
     }
     __syncthreads();
     if (warp_id == 0) {
-        reg_sum = warp_id < num_warps ? s_warps_sum[lane_id] : 0.0f;
+        reg_sum = lane_id < num_warps ? s_warps_sum[lane_id] : 0.0f;
         reg_sum = reduce_sum_f32_warp(reg_sum);
     }
     if (tid == 0) {
@@ -303,7 +305,7 @@ __global__ void gemv_bf162float_kernel(const bf16* __restrict__ W,
     }
     __syncthreads();
     if (warp_id == 0) {
-        reg_sum = warp_id < num_warps ? s_warps_sum[lane_id] : 0.0f;
+        reg_sum = lane_id < num_warps ? s_warps_sum[lane_id] : 0.0f;
         reg_sum = reduce_sum_f32_warp(reg_sum);
     }
     if (tid == 0) {
@@ -452,7 +454,7 @@ __global__ void softmax_f32_kernel(float* __restrict__ score,
     __syncthreads();
     for (uint32_t idx = tid; idx <= pos; idx += NUM_THREADS) {
         const uint32_t score_idx = offset + idx;
-        reg_score = (score[score_idx] - reg_max) / reg_sum;
+        reg_score = expf(score[score_idx] - reg_max) / reg_sum;
         score[score_idx] = reg_score;
     }
 }
@@ -508,6 +510,8 @@ void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
     CUDA_CHECK(cudaGetLastError());
     softmax_f32_kernel<NUM_THREADS>
         <<<grid_dim, block_dim>>>(score, num_q_heads, pos, max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
+    cudaMemset(O_buffer, 0, sizeof(float) * num_q_heads * heads_dim);
     CUDA_CHECK(cudaGetLastError());
     block_dim = {heads_dim / 2};
     grid_dim = {num_q_heads, (pos + 1 + TILE_SEQ - 1) / TILE_SEQ};

@@ -18,6 +18,7 @@ Engine::Engine(const Options& options)
 
 void Engine::chat() {
     uint32_t pos = 0;
+    uint32_t token_id;
     uint32_t next_token_id;
     while (1) {
         char* line = linenoise("ToyInfer> ");
@@ -40,10 +41,15 @@ void Engine::chat() {
         std::cout << std::endl;
         bool assistance_end = false;
         while (assistance_end == false && pos < options.max_seq_len) {
-            transformer.forward(token_ids[pos], pos, logits_h);
+            if (pos < token_cnt) {
+                token_id = token_ids[pos];
+            } else {
+                token_id = next_token_id;
+            }
+            transformer.forward(token_id, pos, logits_h);
             pos++;
             next_token_id = sampler.sample(logits_h);
-            printf("next token id: %d\n",next_token_id);
+            printf("next token id: %d\n", next_token_id);
             if (next_token_id == llm_config.eos_token_id) {
                 assistance_end = true;
             }
