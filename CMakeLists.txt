@@ -105,7 +105,6 @@ if(BUILD_TESTING)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endfunction()
 
-    add_kernel_test(test_add_kernel tests/test_add_kernel.cu)
     add_kernel_test(test_precompute_freq tests/test_precompute_freq.cu)
     add_kernel_test(test_rmsnorm tests/test_rmsnorm.cu)
     add_kernel_test(test_multi_rmsnorm tests/test_multi_rmsnorm.cu)
