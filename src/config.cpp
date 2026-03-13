@@ -32,7 +32,7 @@ LLMConfig::LLMConfig(const Options& options) {
     head_dim = root["head_dim"].asInt();
     bos_token_id = root["bos_token_id"].asInt();
     eos_token_id = root["eos_token_id"].asInt();
-    max_seq_len = root["max_position_embeddings"].asInt();
+    max_position_embeddings = root["max_position_embeddings"].asInt();
     rms_norm_eps = root["rms_norm_eps"].asFloat();
     rope_theta = root["rope_theta"].asFloat();
 

@@ -2,17 +2,17 @@
 
 #include "config.h"
 #include "options.h"
+#include "sampler.h"
 #include "tokenizer.h"
 #include "transformer.h"
-#include "sampler.h"
 namespace toyinfer {
 class Engine {
    public:
-    Engine(const Options& options);
+    Engine(Options& options);
     void chat();
 
    private:
-    const Options& options;
+    Options& options;
     LLMConfig llm_config;
     Tokenizer tokenizer;
     Transformer transformer;

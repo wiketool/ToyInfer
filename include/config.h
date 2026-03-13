@@ -22,7 +22,7 @@ class LLMConfig {
     // 生成控制与处理
     int bos_token_id;
     int eos_token_id;
-    int max_seq_len;  // 对应 max_position_embeddings
+    int max_position_embeddings;  // 对应 max_position_embeddings
 
     // 算法超参
     float rms_norm_eps;

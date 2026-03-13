@@ -101,7 +101,6 @@ std::string format_chunk(OutputRole base_role, const char* text,
         OutputRole role = state.in_thinking ? OutputRole::Thinking : base_role;
         if (!state.active_role_set || role != state.active_role ||
             state.in_bold != state.active_bold) {
-            
             append_style(out, role, state.in_bold);
             state.active_role = role;
             state.active_bold = state.in_bold;
@@ -130,13 +129,17 @@ void reset_format(FormatState& state) {
 }
 }  // namespace
 
-Engine::Engine(const Options& options)
+Engine::Engine(Options& options)
     : options(options),
       llm_config(options),
       tokenizer(options, llm_config),
       transformer(options, llm_config),
       logits_h(std::make_unique<float[]>(llm_config.vocab_size)),
-      sampler(llm_config, options) {};
+      sampler(llm_config, options) {
+    if (llm_config.max_position_embeddings < options.max_seq_len) {
+        options.max_seq_len = llm_config.max_position_embeddings;
+    }
+};
 
 void Engine::chat() {
     uint32_t pos = 0;

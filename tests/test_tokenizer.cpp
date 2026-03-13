@@ -25,7 +25,7 @@ int main() {
 
     toyinfer::Options options{};
     options.model_dir = model_dir.string();
-    options.enable_thinking = false;
+    options.thinking = false;
 
     toyinfer::LLMConfig config(options);
     toyinfer::Tokenizer tokenizer(options, config);

@@ -65,7 +65,7 @@ int MergeRank::find_merge_token_id(const uint32_t token_a_id,
 Tokenizer::Tokenizer(const Options& options, const LLMConfig& llmConfig)
     : model_dir(options.model_dir),
       merge_rank(model_dir),
-      thinking_(options.enable_thinking),
+      thinking_(options.thinking),
       vocab_size_(llmConfig.vocab_size),
       bos_token_id_(llmConfig.bos_token_id),
       eos_token_id_(llmConfig.eos_token_id),
