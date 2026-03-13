@@ -135,6 +135,12 @@ inline T copy_scalar_from_device(const T* ptr) {
     return value;
 }
 
+template <typename T>
+inline void copy_scalar_to_device(const T& value, T* ptr) {
+    cuda_check(cudaMemcpy(ptr, &value, sizeof(T), cudaMemcpyHostToDevice),
+               "cudaMemcpyHostToDevice", __FILE__, __LINE__);
+}
+
 inline bool expect_vector_close(const std::vector<float>& got,
                                 const std::vector<float>& expected,
                                 float atol, float rtol,
