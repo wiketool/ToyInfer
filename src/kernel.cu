@@ -452,6 +452,7 @@ __global__ void softmax_f32_kernel(float* __restrict__ score,
         s_warps[0] = reg_sum;
     }
     __syncthreads();
+    reg_sum = s_warps[0];
     for (uint32_t idx = tid; idx <= pos; idx += NUM_THREADS) {
         const uint32_t score_idx = offset + idx;
         reg_score = expf(score[score_idx] - reg_max) / reg_sum;
