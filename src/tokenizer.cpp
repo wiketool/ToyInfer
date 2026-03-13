@@ -239,11 +239,9 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
             return this->merge_rank > job_b.merge_rank;
         }
     };
-    printf("token cnt: %d\n", token_count);
 
     Node* node = new Node[token_count];
 
-    printf("token cnt: %d\n", token_count);
 
     for (int32_t i = 0; i < token_count; i++) {
         node[i].vaild = true;
@@ -338,16 +336,25 @@ void Tokenizer::render_prompt(std::unique_ptr<char[]>& prompt,
                               const char* system_prompt) {
     if (system_prompt != nullptr && user_prompt != nullptr) {
         // 返回的是不含\0的长度
-        int prompt_len = snprintf(nullptr, 0, system_prompt_template,
-                                  system_prompt, user_prompt);
-        prompt = std::make_unique<char[]>(prompt_len + 1);
-        sprintf(prompt.get(), system_prompt_template, system_prompt,
-                user_prompt);
+        int prompt_len = std::snprintf(nullptr, 0, system_prompt_template,
+                                       system_prompt, user_prompt);
+        if (prompt_len < 0) {
+            throw std::runtime_error("Unable to render prompt");
+        }
+        const size_t buffer_size = static_cast<size_t>(prompt_len) + 1;
+        prompt = std::make_unique<char[]>(buffer_size);
+        std::snprintf(prompt.get(), buffer_size, system_prompt_template,
+                      system_prompt, user_prompt);
     } else if (user_prompt != nullptr) {
         int prompt_len =
-            snprintf(nullptr, 0, user_prompt_template, user_prompt);
-        prompt = std::make_unique<char[]>(prompt_len);
-        sprintf(prompt.get(), user_prompt_template, user_prompt);
+            std::snprintf(nullptr, 0, user_prompt_template, user_prompt);
+        if (prompt_len < 0) {
+            throw std::runtime_error("Unable to render prompt");
+        }
+        const size_t buffer_size = static_cast<size_t>(prompt_len) + 1;
+        prompt = std::make_unique<char[]>(buffer_size);
+        std::snprintf(prompt.get(), buffer_size, user_prompt_template,
+                      user_prompt);
     } else {
         const char* err_msg = "Unable to render prompt";
         SPDLOG_ERROR(err_msg);

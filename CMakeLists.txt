@@ -110,4 +110,26 @@ if(BUILD_TESTING)
     add_kernel_test(test_multi_rmsnorm tests/test_multi_rmsnorm.cu)
     add_kernel_test(test_attn_single_proj tests/test_attn_single_proj.cu)
     add_kernel_test(test_rope tests/test_rope.cu)
+
+    if(TOYINFER_APP_DEPS_READY)
+        add_executable(test_tokenizer
+            tests/test_tokenizer.cpp
+            src/config.cpp
+            src/tokenizer.cpp
+        )
+        target_include_directories(test_tokenizer PRIVATE include)
+        target_compile_definitions(test_tokenizer PRIVATE
+            TOYINFER_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(test_tokenizer PRIVATE
+            CLI11::CLI11
+            spdlog::spdlog
+            jsoncpp_static
+        )
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(test_tokenizer PRIVATE -fsanitize=address)
+            target_link_options(test_tokenizer PRIVATE -fsanitize=address)
+        endif()
+        add_test(NAME test_tokenizer COMMAND test_tokenizer)
+    endif()
 endif()
