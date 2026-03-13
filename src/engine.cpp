@@ -143,7 +143,7 @@ void Engine::chat() {
     uint32_t token_id;
     uint32_t next_token_id;
     while (1) {
-        const char* console = "\033[36mToyInfer> \033[0m";
+        const char* console = "ToyInfer> ";
         char* line = linenoise(console);
         if (line == nullptr) {
             continue;
@@ -191,7 +191,7 @@ void Engine::chat() {
             pos++;
         }
         reset_format(format_state);
-        printf("\n");
+        printf("\033[0m\n");
         pos = 0;
 
         linenoiseFree(line);
