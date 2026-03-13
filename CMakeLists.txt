@@ -105,11 +105,14 @@ if(BUILD_TESTING)
         add_test(NAME ${test_name} COMMAND ${test_name})
     endfunction()
 
+    add_kernel_test(test_add_kernel tests/test_add_kernel.cu)
     add_kernel_test(test_precompute_freq tests/test_precompute_freq.cu)
     add_kernel_test(test_rmsnorm tests/test_rmsnorm.cu)
     add_kernel_test(test_multi_rmsnorm tests/test_multi_rmsnorm.cu)
     add_kernel_test(test_attn_single_proj tests/test_attn_single_proj.cu)
     add_kernel_test(test_rope tests/test_rope.cu)
+    add_kernel_test(test_attention tests/test_attention.cu)
+    add_kernel_test(test_swiglu tests/test_swiglu.cu)
 
     if(TOYINFER_APP_DEPS_READY)
         add_executable(test_tokenizer
