@@ -3,7 +3,8 @@
 #include <cfloat>
 namespace toyinfer {
 
-Sampler::Sampler(const LLMConfig& llmconfig) : llmconfig(llmconfig) {}
+Sampler::Sampler(const LLMConfig& llmconfig, const Options& options)
+    : llmconfig(llmconfig), options(options) {}
 
 int32_t Sampler::sample(std::unique_ptr<float[]>& logits) {
     float max_prob = -FLT_MAX;
