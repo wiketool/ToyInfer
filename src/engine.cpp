@@ -1,8 +1,15 @@
 #include "engine.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <memory>
+#include <queue>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "options.h"
 #include "tokenizer.h"
@@ -127,6 +134,75 @@ void reset_format(FormatState& state) {
     }
     state = FormatState{};
 }
+
+struct Beam {
+    std::vector<uint32_t> tokens;
+    float logprob = 0.0f;
+    bool finished = false;
+};
+
+float compute_log_z(const std::unique_ptr<float[]>& logits,
+                    uint32_t vocab_size) {
+    float max_logit = -std::numeric_limits<float>::infinity();
+    for (uint32_t i = 0; i < vocab_size; ++i) {
+        max_logit = std::max(max_logit, logits.get()[i]);
+    }
+    double sum = 0.0;
+    for (uint32_t i = 0; i < vocab_size; ++i) {
+        sum += std::exp(static_cast<double>(logits.get()[i] - max_logit));
+    }
+    return max_logit + static_cast<float>(std::log(sum));
+}
+
+std::vector<uint32_t> top_k_indices(const std::unique_ptr<float[]>& logits,
+                                    uint32_t vocab_size, uint32_t k) {
+    k = std::min<uint32_t>(k, vocab_size);
+    using Candidate = std::pair<float, uint32_t>;
+    std::priority_queue<Candidate, std::vector<Candidate>,
+                        std::greater<Candidate>>
+        heap;
+    for (uint32_t i = 0; i < vocab_size; ++i) {
+        const float logit = logits.get()[i];
+        if (heap.size() < k) {
+            heap.push({logit, i});
+            continue;
+        }
+        if (logit > heap.top().first) {
+            heap.pop();
+            heap.push({logit, i});
+        }
+    }
+    std::vector<uint32_t> ids;
+    ids.reserve(k);
+    while (!heap.empty()) {
+        ids.push_back(heap.top().second);
+        heap.pop();
+    }
+    std::sort(ids.begin(), ids.end(), [&](uint32_t a, uint32_t b) {
+        return logits.get()[a] > logits.get()[b];
+    });
+    return ids;
+}
+
+float beam_score(const Beam& beam, uint32_t prompt_len, float length_penalty) {
+    const uint32_t gen_len =
+        beam.tokens.size() > prompt_len
+            ? static_cast<uint32_t>(beam.tokens.size() - prompt_len)
+            : 0U;
+    // 1 / Len^penalty
+    const float denom =
+        std::pow(static_cast<float>(std::max(1U, gen_len)), length_penalty);
+        // logprob都是负数，长度越长负的越多，惩罚大于1，会让负数变小，倾向于输出长
+    return beam.logprob / denom;
+}
+
+void compute_logits_for_tokens(Transformer& transformer,
+                               const std::vector<uint32_t>& tokens,
+                               std::unique_ptr<float[]>& logits) {
+    for (size_t pos = 0; pos < tokens.size(); ++pos) {
+        transformer.forward(tokens[pos], static_cast<uint32_t>(pos), logits);
+    }
+}
 }  // namespace
 
 Engine::Engine(Options& options)
@@ -142,9 +218,6 @@ Engine::Engine(Options& options)
 };
 
 void Engine::chat() {
-    uint32_t pos = 0;
-    uint32_t token_id;
-    uint32_t next_token_id;
     while (1) {
         const char* console = "ToyInfer> ";
         char* line = linenoise(console);
@@ -169,34 +242,130 @@ void Engine::chat() {
         std::cout << std::endl;
 #endif
         FormatState format_state;
-        bool assistance_end = false;
-        while (assistance_end == false && pos < options.max_seq_len) {
-            if (pos < token_cnt) {
-                token_id = token_ids[pos];
-            } else {
-                token_id = next_token_id;
-            }
-            transformer.forward(token_id, pos, logits_h);
-            next_token_id = sampler.sample(logits_h);
-            // printf("next token id: %d\n", next_token_id);
-            if ((pos + 1) < token_cnt) {
-                next_token_id = token_ids[pos + 1];
-            } else {
-                if (next_token_id == llm_config.eos_token_id) {
-                    assistance_end = true;
+        if (options.beam_size <= 1) {
+            uint32_t pos = 0;
+            uint32_t token_id;
+            uint32_t next_token_id = 0;
+            bool assistance_end = false;
+            while (assistance_end == false &&
+                   pos < static_cast<uint32_t>(options.max_seq_len)) {
+                if (pos < token_cnt) {
+                    token_id = token_ids[pos];
                 } else {
-                    print_formatted(OutputRole::Assistant,
-                                    tokenizer.decode(next_token_id),
-                                    format_state);
-                    fflush(stdout);
+                    token_id = next_token_id;
+                }
+                transformer.forward(token_id, pos, logits_h);
+                next_token_id = sampler.sample(logits_h);
+                // printf("next token id: %d\n", next_token_id);
+                if ((pos + 1) < token_cnt) {
+                    next_token_id = token_ids[pos + 1];
+                } else {
+                    if (next_token_id ==
+                        static_cast<uint32_t>(llm_config.eos_token_id)) {
+                        assistance_end = true;
+                    } else {
+                        print_formatted(OutputRole::Assistant,
+                                        tokenizer.decode(next_token_id),
+                                        format_state);
+                        fflush(stdout);
+                    }
+                }
+                pos++;
+            }
+        } else {
+            const uint32_t prompt_len = token_cnt;
+            if (prompt_len < static_cast<uint32_t>(options.max_seq_len)) {
+                std::vector<uint32_t> prompt_tokens(token_cnt);
+                for (uint32_t i = 0; i < token_cnt; ++i) {
+                    prompt_tokens[i] = token_ids[i];
+                }
+
+                std::vector<Beam> beams;
+                beams.reserve(static_cast<size_t>(options.beam_size));
+                beams.push_back({prompt_tokens, 0.0f, false});
+
+                const uint32_t max_gen_len =
+                    static_cast<uint32_t>(options.max_seq_len) - prompt_len;
+                for (uint32_t step = 0; step < max_gen_len; ++step) {
+                    std::vector<Beam> candidates;
+                    candidates.reserve(static_cast<size_t>(options.beam_size) *
+                                       static_cast<size_t>(options.beam_size));
+                    for (const auto& beam : beams) {
+                        if (beam.finished) {
+                            candidates.push_back(beam);
+                            continue;
+                        }
+                        compute_logits_for_tokens(transformer, beam.tokens,
+                                                  logits_h);
+                        const float log_z =
+                            compute_log_z(logits_h, llm_config.vocab_size);
+                        const std::vector<uint32_t> top_ids = top_k_indices(
+                            logits_h, llm_config.vocab_size,
+                            static_cast<uint32_t>(options.beam_size));
+                        for (uint32_t token : top_ids) {
+                            Beam next = beam;
+                            next.tokens.push_back(token);
+                            fflush(stdout);
+                            // 乘法结果对数=分别对数相加，log_z=(max+sum_exp)，写下数学公式就知道了
+                            next.logprob += logits_h.get()[token] - log_z;
+                            next.finished =
+                                (token == static_cast<uint32_t>(
+                                              llm_config.eos_token_id));
+                            candidates.push_back(std::move(next));
+                        }
+                    }
+                    std::sort(candidates.begin(), candidates.end(),
+                              [&](const Beam& a, const Beam& b) {
+                                  return beam_score(a, prompt_len,
+                                                    options.length_penalty) >
+                                         beam_score(b, prompt_len,
+                                                    options.length_penalty);
+                              });
+                    if (candidates.size() >
+                        static_cast<size_t>(options.beam_size)) {
+                        candidates.resize(
+                            static_cast<size_t>(options.beam_size));
+                    }
+                    beams = std::move(candidates);
+
+                    bool done = true;
+                    for (const auto& beam : beams) {
+                        if (!beam.finished) {
+                            done = false;
+                            break;
+                        }
+                    }
+                    if (done) {
+                        break;
+                    }
+                }
+
+                if (!beams.empty()) {
+                    const Beam* best = &beams[0];
+                    float best_score =
+                        beam_score(*best, prompt_len, options.length_penalty);
+                    for (size_t i = 1; i < beams.size(); ++i) {
+                        const float score = beam_score(beams[i], prompt_len,
+                                                       options.length_penalty);
+                        if (score > best_score) {
+                            best = &beams[i];
+                            best_score = score;
+                        }
+                    }
+                    for (size_t i = prompt_len; i < best->tokens.size(); ++i) {
+                        const uint32_t token = best->tokens[i];
+                        if (token ==
+                            static_cast<uint32_t>(llm_config.eos_token_id)) {
+                            break;
+                        }
+                        print_formatted(OutputRole::Assistant,
+                                        tokenizer.decode(token), format_state);
+                    }
                 }
             }
-            pos++;
         }
         reset_format(format_state);
         printf("\033[0m\n");
-        pos = 0;
-
         linenoiseFree(line);
     }
 }
