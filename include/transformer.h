@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 
 #include "config.h"
 #include "options.h"
@@ -32,6 +31,9 @@ class Transformer {
         // logits
         float* logits_d;
 
+        // stream and sync
+        cudaStream_t stream_d[3];
+        cudaEvent_t event_d[3];
         void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
     };
@@ -41,10 +43,11 @@ class Transformer {
     const Options& options;
     Qwen3 qwen3_;
     State state;
+    float* logits_h = nullptr;
 
    public:
     Transformer(const Options& options, const LLMConfig& config);
-    void forward(uint32_t token_id, uint32_t pos,
-                 std::unique_ptr<float[]>& logits);
+    ~Transformer();
+    const float* forward(uint32_t token_id, uint32_t pos);
 };
 }  // namespace toyinfer

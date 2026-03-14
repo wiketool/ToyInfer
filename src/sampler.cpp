@@ -10,7 +10,7 @@ Sampler::Sampler(const LLMConfig& llmconfig, const Options& options)
       tokens_prob(std::make_unique<TokenProb[]>(llmconfig.vocab_size)) {}
 
 // topK -> softmax ->topP -> minP
-int32_t Sampler::sample(const std::unique_ptr<float[]>& logits) {
+int32_t Sampler::sample(const float* logits) {
     if (fabs(options.temperature - 0.0f) < 1e-3 || options.top_k == 1) {
         return argmax(logits);
     }
@@ -62,7 +62,7 @@ int32_t Sampler::sample(const std::unique_ptr<float[]>& logits) {
     return tokens_prob[k - 1].index;
 }
 
-uint32_t Sampler::argmax(const std::unique_ptr<float[]>& logits) {
+uint32_t Sampler::argmax(const float* logits) {
     float max_prob = -FLT_MAX;
     uint32_t max_idx = -1;
     for (uint32_t i = 0; i < llmconfig.vocab_size; i++) {

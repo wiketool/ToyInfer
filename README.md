@@ -6,3 +6,4 @@
 - [] Flash attention 解决prefill时softmax显存爆炸和memory bottleneck的情况
 - [] cudaStream 优化
 - [] cudaGraph 优化
+- [x] logits 变为pinned memory，减少copy开销

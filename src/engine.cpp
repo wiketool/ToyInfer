@@ -141,28 +141,27 @@ struct Beam {
     bool finished = false;
 };
 
-float compute_log_z(const std::unique_ptr<float[]>& logits,
-                    uint32_t vocab_size) {
+float compute_log_z(const float* logits, uint32_t vocab_size) {
     float max_logit = -std::numeric_limits<float>::infinity();
     for (uint32_t i = 0; i < vocab_size; ++i) {
-        max_logit = std::max(max_logit, logits.get()[i]);
+        max_logit = std::max(max_logit, logits[i]);
     }
     double sum = 0.0;
     for (uint32_t i = 0; i < vocab_size; ++i) {
-        sum += std::exp(static_cast<double>(logits.get()[i] - max_logit));
+        sum += std::exp(static_cast<double>(logits[i] - max_logit));
     }
     return max_logit + static_cast<float>(std::log(sum));
 }
 
-std::vector<uint32_t> top_k_indices(const std::unique_ptr<float[]>& logits,
-                                    uint32_t vocab_size, uint32_t k) {
+std::vector<uint32_t> top_k_indices(const float* logits, uint32_t vocab_size,
+                                    uint32_t k) {
     k = std::min<uint32_t>(k, vocab_size);
     using Candidate = std::pair<float, uint32_t>;
     std::priority_queue<Candidate, std::vector<Candidate>,
                         std::greater<Candidate>>
         heap;
     for (uint32_t i = 0; i < vocab_size; ++i) {
-        const float logit = logits.get()[i];
+        const float logit = logits[i];
         if (heap.size() < k) {
             heap.push({logit, i});
             continue;
@@ -178,9 +177,8 @@ std::vector<uint32_t> top_k_indices(const std::unique_ptr<float[]>& logits,
         ids.push_back(heap.top().second);
         heap.pop();
     }
-    std::sort(ids.begin(), ids.end(), [&](uint32_t a, uint32_t b) {
-        return logits.get()[a] > logits.get()[b];
-    });
+    std::sort(ids.begin(), ids.end(),
+              [&](uint32_t a, uint32_t b) { return logits[a] > logits[b]; });
     return ids;
 }
 
@@ -192,16 +190,17 @@ float beam_score(const Beam& beam, uint32_t prompt_len, float length_penalty) {
     // 1 / Len^penalty
     const float denom =
         std::pow(static_cast<float>(std::max(1U, gen_len)), length_penalty);
-        // logprob都是负数，长度越长负的越多，惩罚大于1，会让负数变小，倾向于输出长
+    // logprob都是负数，长度越长负的越多，惩罚大于1，会让负数变小，倾向于输出长
     return beam.logprob / denom;
 }
 
-void compute_logits_for_tokens(Transformer& transformer,
-                               const std::vector<uint32_t>& tokens,
-                               std::unique_ptr<float[]>& logits) {
+const float* compute_logits_for_tokens(Transformer& transformer,
+                                       const std::vector<uint32_t>& tokens) {
+    const float* logits = nullptr;
     for (size_t pos = 0; pos < tokens.size(); ++pos) {
-        transformer.forward(tokens[pos], static_cast<uint32_t>(pos), logits);
+        logits = transformer.forward(tokens[pos], static_cast<uint32_t>(pos));
     }
+    return logits;
 }
 }  // namespace
 
@@ -210,7 +209,6 @@ Engine::Engine(Options& options)
       llm_config(options),
       tokenizer(options, llm_config),
       transformer(options, llm_config),
-      logits_h(std::make_unique<float[]>(llm_config.vocab_size)),
       sampler(llm_config, options) {
     if (llm_config.max_position_embeddings < options.max_seq_len) {
         options.max_seq_len = llm_config.max_position_embeddings;
@@ -247,6 +245,7 @@ void Engine::chat() {
             uint32_t token_id;
             uint32_t next_token_id = 0;
             bool assistance_end = false;
+            const float* logits_h = nullptr;
             while (assistance_end == false &&
                    pos < static_cast<uint32_t>(options.max_seq_len)) {
                 if (pos < token_cnt) {
@@ -254,7 +253,7 @@ void Engine::chat() {
                 } else {
                     token_id = next_token_id;
                 }
-                transformer.forward(token_id, pos, logits_h);
+                logits_h = transformer.forward(token_id, pos);
                 next_token_id = sampler.sample(logits_h);
                 // printf("next token id: %d\n", next_token_id);
                 if ((pos + 1) < token_cnt) {
@@ -295,8 +294,8 @@ void Engine::chat() {
                             candidates.push_back(beam);
                             continue;
                         }
-                        compute_logits_for_tokens(transformer, beam.tokens,
-                                                  logits_h);
+                        const float* logits_h =
+                            compute_logits_for_tokens(transformer, beam.tokens);
                         const float log_z =
                             compute_log_z(logits_h, llm_config.vocab_size);
                         const std::vector<uint32_t> top_ids = top_k_indices(
@@ -307,7 +306,7 @@ void Engine::chat() {
                             next.tokens.push_back(token);
                             fflush(stdout);
                             // 乘法结果对数=分别对数相加，log_z=(max+sum_exp)，写下数学公式就知道了
-                            next.logprob += logits_h.get()[token] - log_z;
+                            next.logprob += logits_h[token] - log_z;
                             next.finished =
                                 (token == static_cast<uint32_t>(
                                               llm_config.eos_token_id));

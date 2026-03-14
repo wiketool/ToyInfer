@@ -39,6 +39,11 @@ void Transformer::State::alloc(const Options& options,
     cudaMalloc(&up_d, sizeof(bf16) * llmconfig.intermediate_size);
     cudaMalloc(&intermedia_d, sizeof(bf16) * llmconfig.intermediate_size);
     cudaMalloc(&logits_d, sizeof(float) * llmconfig.vocab_size);
+
+    for (uint32_t i = 0; i < 3; i++) {
+        cudaStreamCreate(&stream_d[i]);
+        cudaEventCreate(&event_d[i]);
+    }
 }
 
 void Transformer::State::free() {
@@ -56,16 +61,31 @@ void Transformer::State::free() {
     cudaFree(gate_d);
     cudaFree(up_d);
     cudaFree(intermedia_d);
+    cudaFree(logits_d);
+    for (uint32_t i = 0; i < 3; i++) {
+        cudaStreamDestroy(stream_d[i]);
+        cudaEventDestroy(event_d[i]);
+    }
 }
 
 Transformer::Transformer(const Options& options, const LLMConfig& config)
-    : qwen3_(options, config), llmconfig(config), options(options) {
+    : llmconfig(config),
+      options(options),
+      qwen3_(options, config),
+      logits_h(nullptr) {
     qwen3_.load_weights();
     state.alloc(options, config);
+    cudaMallocHost(&logits_h, sizeof(float) * llmconfig.vocab_size);
 }
 
-void Transformer::forward(uint32_t token_id, uint32_t pos,
-                          std::unique_ptr<float[]>& logits_h) {
+Transformer::~Transformer() {
+    state.free();
+    if (logits_h != nullptr) {
+        cudaFreeHost(logits_h);
+    }
+}
+
+const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
     const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
     const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
     // 预计算theta
@@ -156,7 +176,8 @@ void Transformer::forward(uint32_t token_id, uint32_t pos,
     gemv_proj_bf162float<NUM_THREADS>(qwen3_.lmhead_d, state.x_d,
                                       state.logits_d, llmconfig.vocab_size,
                                       llmconfig.hidden_size);
-    cudaMemcpy(logits_h.get(), state.logits_d,
-               sizeof(float) * llmconfig.vocab_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(logits_h, state.logits_d, sizeof(float) * llmconfig.vocab_size,
+               cudaMemcpyDeviceToHost);
+    return logits_h;
 }
 }  // namespace toyinfer

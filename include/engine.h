@@ -17,6 +17,5 @@ class Engine {
     Tokenizer tokenizer;
     Transformer transformer;
     Sampler sampler;
-    std::unique_ptr<float[]> logits_h;
 };
 }  // namespace toyinfer
