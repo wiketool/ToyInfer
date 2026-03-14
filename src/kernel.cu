@@ -40,10 +40,12 @@ __global__ void add_bf16_kernel(const bf16* __restrict__ residual,
 
 template <const uint32_t NUM_THREADS>
 void residual_add_bf16(const bf16* __restrict__ residual,
-                       bf16* __restrict__ hidden_state, const uint32_t size) {
+                       bf16* __restrict__ hidden_state, const uint32_t size,
+                       cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
-    add_bf16_kernel<<<grid_dim, block_dim>>>(residual, hidden_state, size);
+    add_bf16_kernel<<<grid_dim, block_dim, 0, stream_d>>>(residual,
+                                                          hidden_state, size);
     CUDA_CHECK(cudaGetLastError());
 };
 
@@ -158,15 +160,17 @@ __global__ void rmsnorm_bf16x2_kernel(const bf16* __restrict__ input,
 template <const uint32_t NUM_THREADS>
 void rmsnorm_bf16(const bf16* __restrict__ input,
                   const bf16* __restrict__ weight, bf16* output, float* sum,
-                  const float rms_norm_eps, const uint32_t size) {
+                  const float rms_norm_eps, const uint32_t size,
+                  cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
-    cudaMemset(sum, 0, sizeof(float));
+    cudaMemsetAsync(sum, 0, sizeof(float), stream_d);
     CUDA_CHECK(cudaGetLastError());
-    reduce_sum_bf16x2_kernel<<<grid_dim, block_dim>>>(input, sum, size);
+    reduce_sum_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(input, sum,
+                                                                   size);
     CUDA_CHECK(cudaGetLastError());
-    rmsnorm_bf16x2_kernel<<<grid_dim, block_dim>>>(input, weight, output, sum,
-                                                   rms_norm_eps, size);
+    rmsnorm_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(
+        input, weight, output, sum, rms_norm_eps, size);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -219,10 +223,11 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
 // 一个block算一个head的norm, blockDim = head_dim/2
 void multi_rmsnorm_bf16(const bf16* input, const bf16* __restrict__ weight,
                         bf16* output, const float rms_norm_eps,
-                        const uint32_t nums_head, const uint32_t head_dim) {
+                        const uint32_t nums_head, const uint32_t head_dim,
+                        cudaStream_t stream_d) {
     dim3 block_dim{head_dim / 2};
     dim3 grid_dim{nums_head};
-    multi_rmsnorm_bf16x2_kernel<<<grid_dim, block_dim>>>(
+    multi_rmsnorm_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(
         input, weight, output, rms_norm_eps, head_dim);
     CUDA_CHECK(cudaGetLastError());
 }
@@ -267,11 +272,12 @@ __global__ void gemv_bf16_kernel(const bf16* __restrict__ W,
 template <const uint32_t NUM_THREADS>
 void gemv_proj_bf16(const bf16* __restrict__ W,
                     const bf16* __restrict__ hidden_states,
-                    bf16* __restrict__ y, const uint32_t M, const uint32_t N) {
+                    bf16* __restrict__ y, const uint32_t M, const uint32_t N,
+                    cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{M};
     gemv_bf16_kernel<NUM_THREADS>
-        <<<grid_dim, block_dim>>>(W, hidden_states, y, M, N);
+        <<<grid_dim, block_dim, 0, stream_d>>>(W, hidden_states, y, M, N);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -317,11 +323,11 @@ template <const uint32_t NUM_THREADS>
 void gemv_proj_bf162float(const bf16* __restrict__ W,
                           const bf16* __restrict__ hidden_states,
                           float* __restrict__ y, const uint32_t M,
-                          const uint32_t N) {
+                          const uint32_t N, cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{M};
     gemv_bf162float_kernel<NUM_THREADS>
-        <<<grid_dim, block_dim>>>(W, hidden_states, y, M, N);
+        <<<grid_dim, block_dim, 0, stream_d>>>(W, hidden_states, y, M, N);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -352,11 +358,12 @@ __global__ void rope_bf16x2_kernel(bf16* qk_ptr,
 }
 
 void rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq, uint32_t pos,
-               const uint32_t nums_head, const uint32_t head_dim) {
+               const uint32_t nums_head, const uint32_t head_dim,
+               cudaStream_t stream_d) {
     dim3 block_dim{head_dim / 2};
     dim3 grid_dim{nums_head};
-    rope_bf16x2_kernel<<<grid_dim, block_dim>>>(qk_ptr, inv_freq, pos,
-                                                head_dim);
+    rope_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(qk_ptr, inv_freq,
+                                                             pos, head_dim);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -499,33 +506,35 @@ void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
                     float* __restrict__ O_buffer, bf16* __restrict__ O,
                     const uint32_t num_q_heads, const uint32_t num_kv_heads,
                     const uint32_t heads_dim, const uint32_t pos,
-                    const uint32_t max_seq_len) {
+                    const uint32_t max_seq_len, cudaStream_t stream_d) {
     dim3 block_dim, grid_dim;
-    cudaMemset(score, 0, sizeof(float) * num_q_heads * max_seq_len);
+    cudaMemsetAsync(score, 0, sizeof(float) * num_q_heads * max_seq_len,
+                    stream_d);
     CUDA_CHECK(cudaGetLastError());
     // q*K
     block_dim = {NUM_THREADS};
     grid_dim = {pos + 1};
-    gqa_qk_gemv_bf16_kernel<NUM_THREADS><<<grid_dim, block_dim>>>(
+    gqa_qk_gemv_bf16_kernel<NUM_THREADS><<<grid_dim, block_dim, 0, stream_d>>>(
         Q, Ks, score, num_q_heads, num_kv_heads, heads_dim, max_seq_len);
     CUDA_CHECK(cudaGetLastError());
     grid_dim = {num_q_heads};
-    softmax_f32_kernel<NUM_THREADS>
-        <<<grid_dim, block_dim>>>(score, num_q_heads, pos, max_seq_len);
+    softmax_f32_kernel<NUM_THREADS><<<grid_dim, block_dim, 0, stream_d>>>(
+        score, num_q_heads, pos, max_seq_len);
     CUDA_CHECK(cudaGetLastError());
-    cudaMemset(O_buffer, 0, sizeof(float) * num_q_heads * heads_dim);
+    cudaMemsetAsync(O_buffer, 0, sizeof(float) * num_q_heads * heads_dim,
+                    stream_d);
     CUDA_CHECK(cudaGetLastError());
     block_dim = {heads_dim / 2};
     grid_dim = {num_q_heads, (pos + 1 + TILE_SEQ - 1) / TILE_SEQ};
-    apply_score2v_f32_kernel<TILE_SEQ>
-        <<<grid_dim, block_dim>>>(score, O_buffer, Vs, num_q_heads,
-                                  num_kv_heads, heads_dim, pos, max_seq_len);
+    apply_score2v_f32_kernel<TILE_SEQ><<<grid_dim, block_dim, 0, stream_d>>>(
+        score, O_buffer, Vs, num_q_heads, num_kv_heads, heads_dim, pos,
+        max_seq_len);
     CUDA_CHECK(cudaGetLastError());
     block_dim = {NUM_THREADS};
     grid_dim = {(num_q_heads * heads_dim + block_dim.x * 2 - 1) /
                 (block_dim.x * 2)};
-    convert_float22bfloat162<<<grid_dim, block_dim>>>(O_buffer, O,
-                                                      num_q_heads * heads_dim);
+    convert_float22bfloat162<<<grid_dim, block_dim, 0, stream_d>>>(
+        O_buffer, O, num_q_heads * heads_dim);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -552,38 +561,42 @@ __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
 
 template <const uint32_t NUM_THREADS>
 void swiglu_bf16x2(const bf16* __restrict__ gate, const bf16* __restrict__ up,
-                   bf16* __restrict__ intermedia, const uint32_t size) {
+                   bf16* __restrict__ intermedia, const uint32_t size,
+                   cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
     dim3 grid_dim{(size + block_dim.x * 2 - 1) / (block_dim.x * 2)};
-    swiglu_bf16x2_kernel<<<grid_dim, block_dim>>>(gate, up, intermedia, size);
+    swiglu_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(
+        gate, up, intermedia, size);
     CUDA_CHECK(cudaGetLastError());
 }
 
 template void residual_add_bf16<256>(const bf16* __restrict__ residual,
                                      bf16* __restrict__ hidden_state,
-                                     const uint32_t size);
+                                     const uint32_t size,
+                                     cudaStream_t stream_d);
 template void rmsnorm_bf16<256>(const bf16* __restrict__ input,
                                 const bf16* __restrict__ weight, bf16* output,
                                 float* sum, const float rms_norm_eps,
-                                const uint32_t size);
+                                const uint32_t size, cudaStream_t stream_d);
 template void gemv_proj_bf16<256>(const bf16* __restrict__ W,
                                   const bf16* __restrict__ hidden_states,
                                   bf16* __restrict__ y, const uint32_t M,
-                                  const uint32_t N);
+                                  const uint32_t N, cudaStream_t stream_d);
 
 template void gemv_proj_bf162float<256>(const bf16* __restrict__ W,
                                         const bf16* __restrict__ hidden_states,
                                         float* __restrict__ y, const uint32_t M,
-                                        const uint32_t N);
+                                        const uint32_t N,
+                                        cudaStream_t stream_d);
 template void attention_bf16<256, 32>(
     const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, float* __restrict__ score,
     float* __restrict__ O_buffer, bf16* __restrict__ O,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t pos, const uint32_t max_seq_len);
+    const uint32_t heads_dim, const uint32_t pos, const uint32_t max_seq_len,
+    cudaStream_t stream_d);
 template void swiglu_bf16x2<256>(const bf16* __restrict__ gate,
                                  const bf16* __restrict__ up,
                                  bf16* __restrict__ intermedia,
-                                 const uint32_t size);
-
+                                 const uint32_t size, cudaStream_t stream_d);
 }  // namespace toyinfer

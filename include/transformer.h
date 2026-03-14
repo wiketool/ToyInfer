@@ -34,6 +34,9 @@ class Transformer {
         // stream and sync
         cudaStream_t stream_d[3];
         cudaEvent_t event_d[3];
+        cudaGraph_t graph_d = nullptr;
+        cudaGraphExec_t graph_exec_d = nullptr;
+
         void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
     };
