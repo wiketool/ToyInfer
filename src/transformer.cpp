@@ -44,6 +44,10 @@ void Transformer::State::alloc(const Options& options,
         cudaStreamCreate(&stream_d[i]);
         cudaEventCreate(&event_d[i]);
     }
+
+    // 预计算theta,只需要预计算一次就行
+    precompute_freq_f32(inv_freq_d, llmconfig.head_dim, llmconfig.rope_theta);
+    cudaDeviceSynchronize();
 }
 
 void Transformer::State::free() {
@@ -88,9 +92,6 @@ Transformer::~Transformer() {
 const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
     const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
     const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
-    // 预计算theta
-    precompute_freq_f32(state.inv_freq_d, llmconfig.head_dim,
-                        llmconfig.rope_theta);
     const bf16* embedding_ptr =
         qwen3_.embed_tokens_d + llmconfig.hidden_size * token_id;
     cudaMemcpy(state.hidden_d, embedding_ptr,
