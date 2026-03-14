@@ -9,7 +9,9 @@ namespace toyinfer {
 
 class Transformer {
     struct State {
-        bf16* hidden_d;  // hidden state, [hidden_size]
+        uint32_t* pos_h;  // dim = 1
+        uint32_t* pos_d;  // dim = 1
+        bf16* hidden_d;   // hidden state, [hidden_size]
         bf16* residual_d;
         bf16* x_d;
 
@@ -18,6 +20,8 @@ class Transformer {
 
         // for attention
         bf16* q_d;
+        bf16* key_d;
+        bf16* val_d;
         bf16* key_cache_d;
         bf16* val_cache_d;
         float* score;  // [num_atten_heads, MAX_SEQ_LEN]

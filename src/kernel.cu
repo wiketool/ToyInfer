@@ -357,6 +357,32 @@ __global__ void rope_bf16x2_kernel(bf16* qk_ptr,
     }
 }
 
+__global__ void rope_bf16x2_graph_kernel(
+    bf16* qk_ptr, const float* __restrict__ inv_freq,
+    const uint32_t* __restrict__ pos_d, const uint32_t head_dim) {
+    assert(head_dim % 2 == 0);
+    const uint32_t tid = threadIdx.x;
+    const uint32_t freq_idx = threadIdx.x;
+    const uint32_t offset = blockIdx.x * head_dim;
+    const uint32_t pos = *pos_d;
+    float reg_real, reg_imag;
+    float reg_rotated_real, reg_rotated_imag;
+    float cos_freq, sin_freq;
+    float freq;
+    if (tid < (head_dim / 2)) {
+        freq = inv_freq[freq_idx];
+        reg_real = __bfloat162float(qk_ptr[offset + tid]);
+        reg_imag = __bfloat162float(qk_ptr[offset + tid + head_dim / 2]);
+        cos_freq = cosf(pos * freq);
+        sin_freq = sinf(pos * freq);
+        reg_rotated_real = cos_freq * reg_real - sin_freq * reg_imag;
+        reg_rotated_imag = cos_freq * reg_imag + sin_freq * reg_real;
+        qk_ptr[offset + tid] = __float2bfloat16(reg_rotated_real);
+        qk_ptr[offset + tid + head_dim / 2] =
+            __float2bfloat16(reg_rotated_imag);
+    }
+}
+
 void rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq, uint32_t pos,
                const uint32_t nums_head, const uint32_t head_dim,
                cudaStream_t stream_d) {
@@ -364,6 +390,42 @@ void rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq, uint32_t pos,
     dim3 grid_dim{nums_head};
     rope_bf16x2_kernel<<<grid_dim, block_dim, 0, stream_d>>>(qk_ptr, inv_freq,
                                                              pos, head_dim);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+void rope_bf16_graph(bf16* qk_ptr, const float* __restrict__ inv_freq,
+                     const uint32_t* __restrict__ pos_d,
+                     const uint32_t nums_head, const uint32_t head_dim,
+                     cudaStream_t stream_d) {
+    dim3 block_dim{head_dim / 2};
+    dim3 grid_dim{nums_head};
+    rope_bf16x2_graph_kernel<<<grid_dim, block_dim, 0, stream_d>>>(
+        qk_ptr, inv_freq, pos_d, head_dim);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template <const uint32_t NUM_THREADS>
+__global__ void write_kv_cache_bf16_kernel(
+    const bf16* __restrict__ src, bf16* __restrict__ cache,
+    const uint32_t* __restrict__ pos_d, const uint32_t kv_dim) {
+    assert(kv_dim % 2 == 0);
+    const uint32_t idx = blockDim.x * blockIdx.x * 2 + threadIdx.x * 2;
+    const uint32_t offset = (*pos_d) * kv_dim;
+    if (idx < kv_dim) {
+        reinterpret_cast<bf162*>(&cache[offset + idx])[0] =
+            FETCH_BF162_RO(&src[idx]);
+    }
+}
+
+template <const uint32_t NUM_THREADS>
+void write_kv_cache_bf16(const bf16* __restrict__ src,
+                         bf16* __restrict__ cache,
+                         const uint32_t* __restrict__ pos_d,
+                         const uint32_t kv_dim, cudaStream_t stream_d) {
+    dim3 block_dim{NUM_THREADS};
+    dim3 grid_dim{(kv_dim + block_dim.x * 2 - 1) / (block_dim.x * 2)};
+    write_kv_cache_bf16_kernel<NUM_THREADS>
+        <<<grid_dim, block_dim, 0, stream_d>>>(src, cache, pos_d, kv_dim);
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -379,6 +441,41 @@ __global__ void gqa_qk_gemv_bf16_kernel(const bf16* __restrict__ Q,
                                         const uint32_t max_seq_len) {
     assert(heads_dim % 64 == 0);  // 一个warp一次处理64个元素
     assert(blockDim.x % 32 == 0);
+    const uint32_t tid = threadIdx.x;
+    const uint32_t lane_id = threadIdx.x % 32;
+    const uint32_t offset = blockIdx.x * (num_kv_heads * heads_dim);
+    float reg_sum;
+    float2 reg_q, reg_k;
+    for (uint32_t idx = tid * 2; idx < num_q_heads * heads_dim;
+         idx += NUM_THREADS * 2) {
+        reg_sum = 0.0f;
+        const uint32_t q_head_idx = idx / heads_dim;
+        const uint32_t k_head_idx = q_head_idx / (num_q_heads / num_kv_heads);
+        reg_q = __bfloat1622float2(FETCH_BF162_RO(&Q[idx]));
+        reg_k = __bfloat1622float2(FETCH_BF162_RO(
+            &Ks[offset + k_head_idx * heads_dim + idx % heads_dim]));
+        reg_sum = fmaf(reg_q.x, reg_k.x, reg_sum);
+        reg_sum = fmaf(reg_q.y, reg_k.y, reg_sum);
+        reg_sum = reduce_sum_f32_warp(reg_sum);
+        reg_sum = reg_sum * rsqrtf(heads_dim);
+        if (lane_id == 0) {
+            atomicAdd(&score[q_head_idx * max_seq_len + blockIdx.x], reg_sum);
+        }
+    }
+}
+
+template <const uint32_t NUM_THREADS>
+__global__ void gqa_qk_gemv_bf16_graph_kernel(
+    const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
+    float* __restrict__ score, const uint32_t num_q_heads,
+    const uint32_t num_kv_heads, const uint32_t heads_dim,
+    const uint32_t* __restrict__ pos_d, const uint32_t max_seq_len) {
+    assert(heads_dim % 64 == 0);  // 一个warp一次处理64个元素
+    assert(blockDim.x % 32 == 0);
+    const uint32_t pos = *pos_d;
+    if (blockIdx.x > pos) {
+        return;
+    }
     const uint32_t tid = threadIdx.x;
     const uint32_t lane_id = threadIdx.x % 32;
     const uint32_t offset = blockIdx.x * (num_kv_heads * heads_dim);
@@ -467,6 +564,69 @@ __global__ void softmax_f32_kernel(float* __restrict__ score,
     }
 }
 
+template <const uint32_t NUM_THREADS>
+__global__ void softmax_f32_graph_kernel(float* __restrict__ score,
+                                         const uint32_t num_q_heads,
+                                         const uint32_t* __restrict__ pos_d,
+                                         const uint32_t max_seq_len) {
+    assert(blockDim.x % 32 == 0);
+    __shared__ float s_warps[32];
+    const uint32_t pos = *pos_d;
+    const uint32_t tid = threadIdx.x;
+    const uint32_t lane_id = threadIdx.x % 32;
+    const uint32_t warp_id = threadIdx.x / 32;
+    const uint32_t num_warps = (NUM_THREADS + 31) / 32;
+    const uint32_t head_idx = blockIdx.x;
+    const uint32_t offset = head_idx * max_seq_len;
+
+    float reg_sum = 0.0f, reg_max = -CUDART_INF_F;
+    float reg_score;
+    for (uint32_t idx = tid; idx <= pos; idx += NUM_THREADS) {
+        const uint32_t score_idx = offset + idx;
+        reg_score = score[score_idx];
+        reg_max = fmaxf(reg_score, reg_max);
+    }
+    reg_max = reduce_max_f32_warp(reg_max);
+    if (lane_id == 0) {
+        s_warps[warp_id] = reg_max;
+    }
+    __syncthreads();
+    if (warp_id == 0) {
+        reg_max = lane_id < num_warps ? s_warps[lane_id] : -CUDART_INF_F;
+        reg_max = reduce_max_f32_warp(reg_max);
+    }
+    if (tid == 0) {
+        s_warps[0] = reg_max;
+    }
+    __syncthreads();
+
+    reg_max = s_warps[0];
+    for (uint32_t idx = tid; idx <= pos; idx += NUM_THREADS) {
+        const uint32_t score_idx = offset + idx;
+        reg_score = score[score_idx] - reg_max;
+        reg_sum += expf(reg_score);
+    }
+    reg_sum = reduce_sum_f32_warp(reg_sum);
+    if (lane_id == 0) {
+        s_warps[warp_id] = reg_sum;
+    }
+    __syncthreads();
+    if (warp_id == 0) {
+        reg_sum = lane_id < num_warps ? s_warps[lane_id] : 0.0f;
+        reg_sum = reduce_sum_f32_warp(reg_sum);
+    }
+    if (tid == 0) {
+        s_warps[0] = reg_sum;
+    }
+    __syncthreads();
+    reg_sum = s_warps[0];
+    for (uint32_t idx = tid; idx <= pos; idx += NUM_THREADS) {
+        const uint32_t score_idx = offset + idx;
+        reg_score = expf(score[score_idx] - reg_max) / reg_sum;
+        score[score_idx] = reg_score;
+    }
+}
+
 // 一个block负责一个Q_head，block线程数为heads_dim/2,
 template <const uint32_t TILE_SEQ>
 __global__ void apply_score2v_f32_kernel(
@@ -479,6 +639,41 @@ __global__ void apply_score2v_f32_kernel(
     //
     const uint32_t tid = threadIdx.x;
     const uint32_t pos_offset = blockIdx.y * TILE_SEQ;
+    const uint32_t pos_end = min(pos + 1, pos_offset + TILE_SEQ);
+    const uint32_t head_idx = blockIdx.x;
+    const uint32_t v_head_idx = head_idx / (num_q_heads / num_kv_heads);
+    const uint32_t head_offset = head_idx * heads_dim;
+    const uint32_t v_head_offset = v_head_idx * heads_dim;
+
+    float2 reg_sum{0.0f, 0.0f};
+    float2 reg_v;
+    float reg_score;
+    for (uint32_t pos_idx = pos_offset; pos_idx < pos_end; pos_idx++) {
+        reg_score = score[head_idx * max_seq_len + pos_idx];
+        const uint32_t k_idx =
+            pos_idx * num_kv_heads * heads_dim + v_head_offset + tid * 2;
+        reg_v = __bfloat1622float2(FETCH_BF162_RO(&Vs[k_idx]));
+        reg_sum.x += reg_score * reg_v.x;
+        reg_sum.y += reg_score * reg_v.y;
+    }
+    atomicAdd(&o[head_offset + tid * 2], reg_sum.x);
+    atomicAdd(&o[head_offset + tid * 2 + 1], reg_sum.y);
+}
+
+template <const uint32_t TILE_SEQ>
+__global__ void apply_score2v_f32_graph_kernel(
+    float* __restrict__ score, float* o, const bf16* __restrict__ Vs,
+    const uint32_t num_q_heads, const uint32_t num_kv_heads,
+    const uint32_t heads_dim, const uint32_t* __restrict__ pos_d,
+    const uint32_t max_seq_len) {
+    assert(heads_dim % 2 == 0);
+    assert(blockDim.x == (heads_dim / 2));
+    const uint32_t pos = *pos_d;
+    const uint32_t tid = threadIdx.x;
+    const uint32_t pos_offset = blockIdx.y * TILE_SEQ;
+    if (pos_offset > pos) {
+        return;
+    }
     const uint32_t pos_end = min(pos + 1, pos_offset + TILE_SEQ);
     const uint32_t head_idx = blockIdx.x;
     const uint32_t v_head_idx = head_idx / (num_q_heads / num_kv_heads);
@@ -538,6 +733,52 @@ void attention_bf16(const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
     CUDA_CHECK(cudaGetLastError());
 }
 
+template <const uint32_t NUM_THREADS, const uint32_t TILE_SEQ>
+void attention_bf16_graph(const bf16* __restrict__ Q,
+                          const bf16* __restrict__ Ks,
+                          const bf16* __restrict__ Vs,
+                          float* __restrict__ score,
+                          float* __restrict__ O_buffer,
+                          bf16* __restrict__ O,
+                          const uint32_t num_q_heads,
+                          const uint32_t num_kv_heads,
+                          const uint32_t heads_dim,
+                          const uint32_t* __restrict__ pos_d,
+                          const uint32_t max_seq_len,
+                          cudaStream_t stream_d) {
+    dim3 block_dim, grid_dim;
+    cudaMemsetAsync(score, 0, sizeof(float) * num_q_heads * max_seq_len,
+                    stream_d);
+    CUDA_CHECK(cudaGetLastError());
+    block_dim = {NUM_THREADS};
+    grid_dim = {max_seq_len};
+    gqa_qk_gemv_bf16_graph_kernel<NUM_THREADS>
+        <<<grid_dim, block_dim, 0, stream_d>>>(
+            Q, Ks, score, num_q_heads, num_kv_heads, heads_dim, pos_d,
+            max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
+    grid_dim = {num_q_heads};
+    softmax_f32_graph_kernel<NUM_THREADS><<<grid_dim, block_dim, 0, stream_d>>>(
+        score, num_q_heads, pos_d, max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
+    cudaMemsetAsync(O_buffer, 0, sizeof(float) * num_q_heads * heads_dim,
+                    stream_d);
+    CUDA_CHECK(cudaGetLastError());
+    block_dim = {heads_dim / 2};
+    grid_dim = {num_q_heads, (max_seq_len + TILE_SEQ - 1) / TILE_SEQ};
+    apply_score2v_f32_graph_kernel<TILE_SEQ>
+        <<<grid_dim, block_dim, 0, stream_d>>>(
+            score, O_buffer, Vs, num_q_heads, num_kv_heads, heads_dim, pos_d,
+            max_seq_len);
+    CUDA_CHECK(cudaGetLastError());
+    block_dim = {NUM_THREADS};
+    grid_dim = {(num_q_heads * heads_dim + block_dim.x * 2 - 1) /
+                (block_dim.x * 2)};
+    convert_float22bfloat162<<<grid_dim, block_dim, 0, stream_d>>>(
+        O_buffer, O, num_q_heads * heads_dim);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
                                      const bf16* __restrict__ up,
                                      bf16* __restrict__ intermedia,
@@ -588,6 +829,11 @@ template void gemv_proj_bf162float<256>(const bf16* __restrict__ W,
                                         float* __restrict__ y, const uint32_t M,
                                         const uint32_t N,
                                         cudaStream_t stream_d);
+template void write_kv_cache_bf16<256>(const bf16* __restrict__ src,
+                                       bf16* __restrict__ cache,
+                                       const uint32_t* __restrict__ pos_d,
+                                       const uint32_t kv_dim,
+                                       cudaStream_t stream_d);
 template void attention_bf16<256, 32>(
     const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, float* __restrict__ score,
@@ -595,6 +841,13 @@ template void attention_bf16<256, 32>(
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
     const uint32_t heads_dim, const uint32_t pos, const uint32_t max_seq_len,
     cudaStream_t stream_d);
+template void attention_bf16_graph<256, 32>(
+    const bf16* __restrict__ Q, const bf16* __restrict__ Ks,
+    const bf16* __restrict__ Vs, float* __restrict__ score,
+    float* __restrict__ O_buffer, bf16* __restrict__ O,
+    const uint32_t num_q_heads, const uint32_t num_kv_heads,
+    const uint32_t heads_dim, const uint32_t* __restrict__ pos_d,
+    const uint32_t max_seq_len, cudaStream_t stream_d);
 template void swiglu_bf16x2<256>(const bf16* __restrict__ gate,
                                  const bf16* __restrict__ up,
                                  bf16* __restrict__ intermedia,
