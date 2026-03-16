@@ -18,6 +18,7 @@
     } while (0)
 
 #define FETCH_BF162_RO(addr) reinterpret_cast<const bf162*>(addr)[0]
+#define FETCH_BF162(addr) reinterpret_cast<bf162*>(addr)[0]
 
 namespace toyinfer {
 
@@ -31,10 +32,10 @@ __global__ void add_bf16_kernel(const bf16* __restrict__ residual,
     if (idx < size) {
         bf162 reg_res, reg_hid;
         reg_res = FETCH_BF162_RO(&residual[idx]);
-        reg_hid = reinterpret_cast<bf162*>(&hidden_state[idx])[0];
+        reg_hid = FETCH_BF162(&hidden_state[idx]);
         reg_hid.x = reg_hid.x + reg_res.x;
         reg_hid.y = reg_hid.y + reg_res.y;
-        reinterpret_cast<bf162*>(&hidden_state[idx])[0] = reg_hid;
+        FETCH_BF162(&hidden_state[idx]) = reg_hid;
     }
 }
 
@@ -93,7 +94,7 @@ __global__ void convert_float22bfloat162(const float* __restrict__ x,
     if (idx < size) {
         reg_xy.x = __float2bfloat16(x[idx]);
         reg_xy.y = __float2bfloat16(x[idx + 1]);
-        reinterpret_cast<bf162*>(&y[idx])[0] = reg_xy;
+        FETCH_BF162(&y[idx]) = reg_xy;
     }
 }
 
@@ -152,7 +153,7 @@ __global__ void rmsnorm_bf16x2_kernel(const bf16* __restrict__ input,
         val = rsqrtf(val);
         normed_f32x2.x = input_f32x2.x * val * weight_f32x2.x;
         normed_f32x2.y = input_f32x2.y * val * weight_f32x2.y;
-        reinterpret_cast<bf162*>(&output[offset + tid * 2])[0] =
+        FETCH_BF162(&output[offset + tid * 2]) =
             __float22bfloat162_rn(normed_f32x2);
     }
 }
@@ -215,8 +216,7 @@ __global__ void multi_rmsnorm_bf16x2_kernel(const bf16* input,
     if (idx < head_dim) {
         reg_input.x = reg_input.x * multi_val * reg_weight.x;
         reg_input.y = reg_input.y * multi_val * reg_weight.y;
-        reinterpret_cast<bf162*>(&output[offset + idx])[0] =
-            __float22bfloat162_rn(reg_input);
+        FETCH_BF162(&output[offset + idx]) = __float22bfloat162_rn(reg_input);
     }
 }
 
@@ -357,9 +357,10 @@ __global__ void rope_bf16x2_kernel(bf16* qk_ptr,
     }
 }
 
-__global__ void rope_bf16x2_graph_kernel(
-    bf16* qk_ptr, const float* __restrict__ inv_freq,
-    const uint32_t* __restrict__ pos_d, const uint32_t head_dim) {
+__global__ void rope_bf16x2_graph_kernel(bf16* qk_ptr,
+                                         const float* __restrict__ inv_freq,
+                                         const uint32_t* __restrict__ pos_d,
+                                         const uint32_t head_dim) {
     assert(head_dim % 2 == 0);
     const uint32_t tid = threadIdx.x;
     const uint32_t freq_idx = threadIdx.x;
@@ -405,9 +406,10 @@ void rope_bf16_graph(bf16* qk_ptr, const float* __restrict__ inv_freq,
 }
 
 template <const uint32_t NUM_THREADS>
-__global__ void write_kv_cache_bf16_kernel(
-    const bf16* __restrict__ src, bf16* __restrict__ cache,
-    const uint32_t* __restrict__ pos_d, const uint32_t kv_dim) {
+__global__ void write_kv_cache_bf16_kernel(const bf16* __restrict__ src,
+                                           bf16* __restrict__ cache,
+                                           const uint32_t* __restrict__ pos_d,
+                                           const uint32_t kv_dim) {
     assert(kv_dim % 2 == 0);
     const uint32_t idx = blockDim.x * blockIdx.x * 2 + threadIdx.x * 2;
     const uint32_t offset = (*pos_d) * kv_dim;
@@ -418,8 +420,7 @@ __global__ void write_kv_cache_bf16_kernel(
 }
 
 template <const uint32_t NUM_THREADS>
-void write_kv_cache_bf16(const bf16* __restrict__ src,
-                         bf16* __restrict__ cache,
+void write_kv_cache_bf16(const bf16* __restrict__ src, bf16* __restrict__ cache,
                          const uint32_t* __restrict__ pos_d,
                          const uint32_t kv_dim, cudaStream_t stream_d) {
     dim3 block_dim{NUM_THREADS};
@@ -738,14 +739,11 @@ void attention_bf16_graph(const bf16* __restrict__ Q,
                           const bf16* __restrict__ Ks,
                           const bf16* __restrict__ Vs,
                           float* __restrict__ score,
-                          float* __restrict__ O_buffer,
-                          bf16* __restrict__ O,
+                          float* __restrict__ O_buffer, bf16* __restrict__ O,
                           const uint32_t num_q_heads,
-                          const uint32_t num_kv_heads,
-                          const uint32_t heads_dim,
+                          const uint32_t num_kv_heads, const uint32_t heads_dim,
                           const uint32_t* __restrict__ pos_d,
-                          const uint32_t max_seq_len,
-                          cudaStream_t stream_d) {
+                          const uint32_t max_seq_len, cudaStream_t stream_d) {
     dim3 block_dim, grid_dim;
     cudaMemsetAsync(score, 0, sizeof(float) * num_q_heads * max_seq_len,
                     stream_d);
@@ -753,9 +751,9 @@ void attention_bf16_graph(const bf16* __restrict__ Q,
     block_dim = {NUM_THREADS};
     grid_dim = {max_seq_len};
     gqa_qk_gemv_bf16_graph_kernel<NUM_THREADS>
-        <<<grid_dim, block_dim, 0, stream_d>>>(
-            Q, Ks, score, num_q_heads, num_kv_heads, heads_dim, pos_d,
-            max_seq_len);
+        <<<grid_dim, block_dim, 0, stream_d>>>(Q, Ks, score, num_q_heads,
+                                               num_kv_heads, heads_dim, pos_d,
+                                               max_seq_len);
     CUDA_CHECK(cudaGetLastError());
     grid_dim = {num_q_heads};
     softmax_f32_graph_kernel<NUM_THREADS><<<grid_dim, block_dim, 0, stream_d>>>(
@@ -767,9 +765,9 @@ void attention_bf16_graph(const bf16* __restrict__ Q,
     block_dim = {heads_dim / 2};
     grid_dim = {num_q_heads, (max_seq_len + TILE_SEQ - 1) / TILE_SEQ};
     apply_score2v_f32_graph_kernel<TILE_SEQ>
-        <<<grid_dim, block_dim, 0, stream_d>>>(
-            score, O_buffer, Vs, num_q_heads, num_kv_heads, heads_dim, pos_d,
-            max_seq_len);
+        <<<grid_dim, block_dim, 0, stream_d>>>(score, O_buffer, Vs, num_q_heads,
+                                               num_kv_heads, heads_dim, pos_d,
+                                               max_seq_len);
     CUDA_CHECK(cudaGetLastError());
     block_dim = {NUM_THREADS};
     grid_dim = {(num_q_heads * heads_dim + block_dim.x * 2 - 1) /
@@ -778,6 +776,179 @@ void attention_bf16_graph(const bf16* __restrict__ Q,
         O_buffer, O, num_q_heads * heads_dim);
     CUDA_CHECK(cudaGetLastError());
 }
+
+template <const uint32_t Bc, const uint32_t Br, const uint32_t HEAD_DIM>
+__global__ void flash_attention_v1_bf16_kernel(
+    const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
+    const bf16* __restrict__ Vs, bf16* __restrict__ Os,
+    const uint32_t num_q_heads, const uint32_t num_kv_heads,
+    const uint32_t heads_dim, const uint32_t seq_len) {
+    // warp级别归约
+    assert(Bc % 32 == 0);
+    assert(blockDim.x == Bc);
+    assert(blockDim.y == Br);
+    assert(HEAD_DIM % Bc == 0);
+    // 对QKV使用原始的bf16，运算时转换，减少share memory压力
+    __shared__ bf16 s_Q[Br][HEAD_DIM];
+    __shared__ bf16 s_K[Bc][HEAD_DIM];
+    __shared__ bf16 s_V[Bc][HEAD_DIM];
+    __shared__ float s_score[Br][Bc];
+    __shared__ float s_m[Br];
+    __shared__ float s_l[Br];
+    // shape(s_O) = (Br,head_dim)
+    __shared__ float s_O[Br][HEAD_DIM];
+    __shared__ float s_warp[Br][Bc / 32];
+    //
+    float reg_score = 0.0f;
+    float reg_max = 0.0f;
+    float reg_delta = 0.0f;  // m(i-1) - m(i)
+    float reg_d[HEAD_DIM / Bc];
+
+    //
+
+    const uint32_t tx = threadIdx.x;
+    const uint32_t ty = threadIdx.y;
+    const uint32_t num_threads = blockDim.x * blockDim.y;
+    const uint32_t lane_id = tx % 32;
+    const uint32_t warp_id = tx / 32;
+    const uint32_t num_warps = blockDim.x / 32;
+    // head dim slice分片
+    const uint32_t slice_size = HEAD_DIM / Bc;
+    const uint32_t dim_start = tx * slice_size;
+    //
+    const uint32_t head_idx = blockIdx.x;
+    const uint32_t kv_head_idx = head_idx / (num_q_heads / num_kv_heads);
+    const uint32_t q_dim = num_q_heads * heads_dim;
+    const uint32_t kv_dim = num_kv_heads * heads_dim;
+
+    const uint32_t q_global = blockIdx.y * Br;
+    const uint32_t q_tile = ty;
+    const uint32_t q_idx = q_global + q_tile;
+    const uint32_t q_offset = q_idx * q_dim + head_idx * heads_dim;
+
+    const uint32_t kv_tile = tx;
+    // init m,l
+    if (tx == 0) {
+        s_m[q_tile] = -CUDART_INF_F;
+        s_l[q_tile] = 0.0f;
+    }
+
+    // load Q,O
+    for (uint32_t i = threadIdx.x; i < heads_dim; i += blockDim.x) {
+        if (q_idx < seq_len) {
+            s_Q[q_tile][i] = Qs[q_offset + i];  // load Q
+        } else {
+            s_Q[q_tile][i] = __float2bfloat16(0.0f);
+        }
+        s_O[q_tile][i] = 0.0f;  // set O to zero, init
+    }
+    // loop over K/V
+    for (uint32_t i = 0; i < (seq_len + Bc - 1) / Bc; i++) {
+        const uint32_t kv_idx = i * Bc + kv_tile;
+        // load K and V
+        const uint32_t tid = blockDim.x * ty + tx;
+        for (uint32_t idx = tid; idx < Bc * heads_dim; idx += num_threads) {
+            const uint32_t row = idx / heads_dim;
+            const uint32_t col = idx % heads_dim;
+            const uint32_t row_global = i * Bc + row;
+            const uint32_t col_global = kv_head_idx * heads_dim + col;
+            if (row_global < seq_len) {
+                s_K[row][col] = Ks[row_global * kv_dim + col_global];
+                s_V[row][col] = Vs[row_global * kv_dim + col_global];
+            } else {
+                s_K[row][col] = bf16{0.0f};
+                s_V[row][col] = bf16{0.0f};
+            }
+        }
+        __syncthreads();
+        reg_score = 0.0f;
+        // (Q*K)/sqrt(d)
+        for (uint32_t j = 0; j < heads_dim; j++) {
+            reg_score = fmaf(__bfloat162float(s_Q[q_tile][j]),
+                             __bfloat162float(s_K[kv_tile][j]), reg_score);
+        }
+        reg_score *= rsqrtf(heads_dim);
+        if (q_idx < kv_idx || q_idx >= seq_len || kv_idx >= seq_len) {
+            reg_score = -CUDART_INF_F;
+        }
+        // reduce
+        __syncthreads();
+        reg_max = reduce_max_f32_warp(reg_score);
+        if (lane_id == 0) {
+            s_warp[q_tile][warp_id] = reg_max;
+        }
+        __syncthreads();
+        if (warp_id == 0) {
+            reg_max = lane_id < num_warps ? s_warp[q_tile][lane_id] : -CUDART_INF_F;
+            reg_max = reduce_max_f32_warp(reg_max);
+        }
+        if (tx == 0) {
+            s_warp[q_tile][0] = reg_max;
+        }
+        __syncthreads();
+        reg_max = s_warp[q_tile][0];
+        reg_max = fmaxf(s_m[q_tile], reg_max);
+        reg_delta = s_m[q_tile] - reg_max;
+        reg_score = expf(reg_score - reg_max);
+        s_score[q_tile][kv_tile] = reg_score;
+        // 重用寄存器
+        float& reg_sum = reg_score;
+        reg_sum = reduce_sum_f32_warp(reg_sum);
+        if (lane_id == 0) {
+            s_warp[q_tile][warp_id] = reg_sum;
+        }
+        __syncthreads();
+        if (warp_id == 0) {
+            s_warp = lane_id < num_warps ? s_warp[q_tile][lane_id] : 0.0f;
+            reg_sum = reduce_sum_f32_warp(reg_sum);
+        }
+        if (tx == 0) {
+            s_warp[q_tile][0] = reg_sum;
+        }
+        __syncthreads();
+        reg_sum = s_warp[0];
+        // 计算O
+        for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
+            reg_d[dim_slice] = 0;
+        }
+        for (uint32_t v_tile = 0; v_tile < Bc; v_tile++) {
+            reg_score = s_score[q_tile][v_tile];
+            for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
+                const uint32_t dim_idx = dim_slice + dim_start;
+                reg_d[dim_slice] +=
+                    __bfloat162float(s_V[v_tile][dim_idx]) * reg_score;
+            }
+        }
+        // 输出m,l,O
+        if (tx == 0) {
+            s_m[q_tile] = reg_max;
+            s_l[q_tile] = expf(reg_delta) * s_l[q_tile] + reg_sum;
+        }
+        for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
+            const uint32_t dim_idx = dim_slice + dim_start;
+            s_O[q_tile][dim_idx] =
+                expf(reg_delta) * s_O[q_tile][dim_idx] + reg_d[dim_slice];
+        }
+        __syncthreads();
+    }
+    for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
+        const uint32_t dim_idx = dim_slice + dim_start;
+        Os[q_offset + dim_idx] =
+            __float2bfloat16(s_O[q_tile][dim_idx] / s_l[q_tile]);
+    }
+}
+
+// Tile size for K/V = Bc, Tile size for Q/O = Br;
+template <const uint32_t Bc, const uint32_t Br>
+void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
+                             const bf16* __restrict__ Ks,
+                             const bf16* __restrict__ Vs, bf16* __restrict__ Os,
+                             const uint32_t num_q_heads,
+                             const uint32_t num_kv_heads,
+                             const uint32_t heads_dim, const uint32_t seq_len) {
+    const dim3 block_dim{Bc, Br};
+    const dim3 grid_dim{num_q_heads, (seq_len + Br - 1) / Br};
+};
 
 __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
                                      const bf16* __restrict__ up,
@@ -795,8 +966,7 @@ __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
         reg_gate.y = reg_gate.y * (1.0f / (1.0f + expf(-reg_gate.y)));
         reg_up.x = reg_up.x * reg_gate.x;
         reg_up.y = reg_up.y * reg_gate.y;
-        reinterpret_cast<bf162*>(&intermedia[idx])[0] =
-            __float22bfloat162_rn(reg_up);
+        FETCH_BF162(&intermedia[idx]) = __float22bfloat162_rn(reg_up);
     }
 }
 

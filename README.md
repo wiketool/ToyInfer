@@ -7,3 +7,4 @@
 - [x] cudaStream 优化
 - [x] cudaGraph 优化
 - [x] logits 变为pinned memory，减少copy开销
+- [ ] 测量flash attention中对于计算O的时候，到底是存score划算还是重新算score划算；现在用的是存score
