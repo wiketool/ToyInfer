@@ -1,6 +1,7 @@
 #include "engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -141,6 +142,31 @@ struct Beam {
     bool finished = false;
 };
 
+struct InferenceStats {
+    uint32_t prompt_tokens = 0;
+    uint32_t generated_tokens = 0;
+    std::chrono::steady_clock::time_point start_time;
+    std::chrono::steady_clock::time_point end_time;
+};
+
+void print_inference_stats(const InferenceStats& stats) {
+    const uint32_t total_tokens =
+        stats.prompt_tokens + stats.generated_tokens;
+    const double inference_time =
+        std::chrono::duration<double>(stats.end_time - stats.start_time)
+            .count();
+    const double tokens_per_sec =
+        inference_time > 0.0
+            ? static_cast<double>(total_tokens) / inference_time
+            : 0.0;
+
+    std::printf(
+        "[perf] prompt_tokens=%u, generated_tokens=%u, total_tokens=%u, "
+        "inference_time=%.3fs, tokens/s=%.2f\n",
+        stats.prompt_tokens, stats.generated_tokens, total_tokens,
+        inference_time, tokens_per_sec);
+}
+
 float compute_log_z(const float* logits, uint32_t vocab_size) {
     float max_logit = -std::numeric_limits<float>::infinity();
     for (uint32_t i = 0; i < vocab_size; ++i) {
@@ -240,6 +266,9 @@ void Engine::chat() {
         std::cout << std::endl;
 #endif
         FormatState format_state;
+        InferenceStats stats;
+        stats.prompt_tokens = token_cnt;
+        stats.start_time = std::chrono::steady_clock::now();
         if (options.beam_size <= 1) {
             uint32_t pos = 0;
             uint32_t token_id;
@@ -263,6 +292,7 @@ void Engine::chat() {
                         static_cast<uint32_t>(llm_config.eos_token_id)) {
                         assistance_end = true;
                     } else {
+                        stats.generated_tokens++;
                         print_formatted(OutputRole::Assistant,
                                         tokenizer.decode(next_token_id),
                                         format_state);
@@ -357,14 +387,17 @@ void Engine::chat() {
                             static_cast<uint32_t>(llm_config.eos_token_id)) {
                             break;
                         }
+                        stats.generated_tokens++;
                         print_formatted(OutputRole::Assistant,
                                         tokenizer.decode(token), format_state);
                     }
                 }
             }
         }
+        stats.end_time = std::chrono::steady_clock::now();
         reset_format(format_state);
         printf("\033[0m\n");
+        print_inference_stats(stats);
         linenoiseFree(line);
     }
 }
