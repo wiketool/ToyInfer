@@ -126,6 +126,7 @@ if(BUILD_TESTING)
     add_kernel_test(test_apply_score2v_f32_kernel tests/test_apply_score2v_f32_kernel.cu)
     add_kernel_test(test_convert_float22bfloat162 tests/test_convert_float22bfloat162.cu)
     add_kernel_test(test_attention_bf16 tests/test_attention_bf16.cu)
+    add_kernel_test(test_flash_attention_v1_bf16 tests/test_flash_attention_v1_bf16.cu)
     add_kernel_test(test_swiglu_bf16x2_kernel tests/test_swiglu_bf16x2_kernel.cu)
     add_kernel_test(test_swiglu_bf16x2 tests/test_swiglu_bf16x2.cu)
 

@@ -801,6 +801,7 @@ __global__ void flash_attention_v1_bf16_kernel(
     //
     float reg_score = 0.0f;
     float reg_max = 0.0f;
+    float reg_sum = 0.0f;
     float reg_delta = 0.0f;  // m(i-1) - m(i)
     float reg_d[HEAD_DIM / Bc];
 
@@ -879,7 +880,8 @@ __global__ void flash_attention_v1_bf16_kernel(
         }
         __syncthreads();
         if (warp_id == 0) {
-            reg_max = lane_id < num_warps ? s_warp[q_tile][lane_id] : -CUDART_INF_F;
+            reg_max =
+                lane_id < num_warps ? s_warp[q_tile][lane_id] : -CUDART_INF_F;
             reg_max = reduce_max_f32_warp(reg_max);
         }
         if (tx == 0) {
@@ -891,22 +893,22 @@ __global__ void flash_attention_v1_bf16_kernel(
         reg_delta = s_m[q_tile] - reg_max;
         reg_score = expf(reg_score - reg_max);
         s_score[q_tile][kv_tile] = reg_score;
-        // 重用寄存器
-        float& reg_sum = reg_score;
+
+        float reg_sum = reg_score;
         reg_sum = reduce_sum_f32_warp(reg_sum);
         if (lane_id == 0) {
             s_warp[q_tile][warp_id] = reg_sum;
         }
         __syncthreads();
         if (warp_id == 0) {
-            s_warp = lane_id < num_warps ? s_warp[q_tile][lane_id] : 0.0f;
+            reg_sum = lane_id < num_warps ? s_warp[q_tile][lane_id] : 0.0f;
             reg_sum = reduce_sum_f32_warp(reg_sum);
         }
         if (tx == 0) {
             s_warp[q_tile][0] = reg_sum;
         }
         __syncthreads();
-        reg_sum = s_warp[0];
+        reg_sum = s_warp[q_tile][0];
         // 计算O
         for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
             reg_d[dim_slice] = 0;
@@ -939,7 +941,7 @@ __global__ void flash_attention_v1_bf16_kernel(
 }
 
 // Tile size for K/V = Bc, Tile size for Q/O = Br;
-template <const uint32_t Bc, const uint32_t Br>
+template <const uint32_t Bc, const uint32_t Br, const uint32_t HEAD_DIM>
 void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
                              const bf16* __restrict__ Ks,
                              const bf16* __restrict__ Vs, bf16* __restrict__ Os,
@@ -948,6 +950,8 @@ void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
                              const uint32_t heads_dim, const uint32_t seq_len) {
     const dim3 block_dim{Bc, Br};
     const dim3 grid_dim{num_q_heads, (seq_len + Br - 1) / Br};
+    flash_attention_v1_bf16_kernel<Bc, Br, HEAD_DIM><<<grid_dim, block_dim>>>(
+        Qs, Ks, Vs, Os, num_q_heads, num_kv_heads, heads_dim, seq_len);
 };
 
 __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
