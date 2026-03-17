@@ -1,5 +1,19 @@
 # 一些碎碎念
 
+
+## Compile
+
+```bash
+git submodule update --init --recursive
+mkdir -p build && cd build
+cmake ..
+cd ..
+ln -s build/compile_commands.json compile_commands.json
+```
+
+如果clangd报错，则下载最新的clangd并设置vscode的clangd path
+
+
 ## Kernel后续优化
 
 - [ ] softmax_f32_kernel分片处理，使用online softmax算法，减少和global memory交互的次数
