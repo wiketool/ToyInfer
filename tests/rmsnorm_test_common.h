@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "test_helpers.h"
+
 namespace rmsnorm_test {
 
 constexpr uint32_t kThreads = 256;
@@ -29,13 +31,11 @@ inline Case make_case(const std::string& label, uint32_t size,
     test_case.input.resize(buffer_size);
     test_case.weight.resize(buffer_size);
     for (uint32_t i = 0; i < size; ++i) {
-        test_case.input[i] =
-            0.48f * std::sin((i + 1) * input_phase) -
-            0.22f * std::cos((i + 3) * input_phase * 0.7f) +
-            0.013f * static_cast<float>(i % 7);
-        test_case.weight[i] =
-            0.72f + 0.18f * std::sin((i + 5) * weight_phase) -
-            0.04f * static_cast<float>((i * 3) % 5);
+        test_case.input[i] = 0.48f * std::sin((i + 1) * input_phase) -
+                             0.22f * std::cos((i + 3) * input_phase * 0.7f) +
+                             0.013f * static_cast<float>(i % 7);
+        test_case.weight[i] = 0.72f + 0.18f * std::sin((i + 5) * weight_phase) -
+                              0.04f * static_cast<float>((i * 3) % 5);
     }
     for (uint32_t i = size; i < buffer_size; ++i) {
         test_case.input[i] = -0.75f + 0.05f * static_cast<float>(i - size);
@@ -52,13 +52,13 @@ inline float reference_sum(const std::vector<float>& input_q, uint32_t size) {
     return sum;
 }
 
-inline std::vector<float> reference_output(const std::vector<float>& input_q,
-                                           const std::vector<float>& weight_q,
-                                           const std::vector<float>& initial_out_q,
-                                           float sum, float eps,
-                                           uint32_t size) {
+inline std::vector<float> reference_output(
+    const std::vector<float>& input_q, const std::vector<float>& weight_q,
+    const std::vector<float>& initial_out_q, float sum, float eps,
+    uint32_t size) {
     std::vector<float> expected = initial_out_q;
-    const float inv_rms = 1.0f / std::sqrt(sum / static_cast<float>(size) + eps);
+    const float inv_rms =
+        1.0f / std::sqrt(sum / static_cast<float>(size) + eps);
     for (uint32_t i = 0; i < size; ++i) {
         expected[i] =
             kernel_test::round_to_bf16(input_q[i] * inv_rms * weight_q[i]);

@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "test_helpers.h"
+
 namespace multi_rmsnorm_test {
 
 struct Case {
@@ -45,17 +47,16 @@ inline Case make_case(const std::string& label, uint32_t num_heads,
         test_case.input[i] = -0.5f + 0.07f * static_cast<float>(i - size);
     }
     for (uint32_t i = 0; i < head_dim; ++i) {
-        test_case.weight[i] =
-            0.68f + 0.14f * std::sin((i + 5) * weight_phase) -
-            0.05f * static_cast<float>(i % 3);
+        test_case.weight[i] = 0.68f + 0.14f * std::sin((i + 5) * weight_phase) -
+                              0.05f * static_cast<float>(i % 3);
     }
     return test_case;
 }
 
-inline std::vector<float> reference_output(const Case& test_case,
-                                           const std::vector<float>& input_q,
-                                           const std::vector<float>& weight_q,
-                                           const std::vector<float>& initial_out_q) {
+inline std::vector<float> reference_output(
+    const Case& test_case, const std::vector<float>& input_q,
+    const std::vector<float>& weight_q,
+    const std::vector<float>& initial_out_q) {
     std::vector<float> expected = initial_out_q;
     for (uint32_t h = 0; h < test_case.num_heads; ++h) {
         const uint32_t offset = h * test_case.head_dim;
