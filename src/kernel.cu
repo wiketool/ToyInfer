@@ -952,7 +952,17 @@ void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
     const dim3 grid_dim{num_q_heads, (seq_len + Br - 1) / Br};
     flash_attention_v1_bf16_kernel<Bc, Br, HEAD_DIM><<<grid_dim, block_dim>>>(
         Qs, Ks, Vs, Os, num_q_heads, num_kv_heads, heads_dim, seq_len);
-};
+}
+
+// A[M*K] B[K*N],transpose = 1 apply to B
+template <const uint32_t TILE_M, const uint32_t TILE_N>
+__global__ void hgemm_bf16_kernel(const bf16* __restrict__ A,
+                                  const bf16* __restrict__ B,
+                                  const bf16* __restrict__ C, const uint32_t M,
+                                  const uint32_t N, const uint32_t K,
+                                  const bool transpose) {
+    //
+}
 
 __global__ void swiglu_bf16x2_kernel(const bf16* __restrict__ gate,
                                      const bf16* __restrict__ up,
