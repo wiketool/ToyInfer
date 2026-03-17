@@ -22,3 +22,20 @@ ln -s build/compile_commands.json compile_commands.json
 - [x] cudaGraph 优化
 - [x] logits 变为pinned memory，减少copy开销
 - [ ] 测量flash attention中对于计算O的时候，到底是存score划算还是重新算score划算；现在用的是存score
+- [ ] batch GEMV用HGEMM实现
+
+## 并行Prefill性能测试
+
+使用项目根目录的test.txt文件，3000中文词，thinking模式，仅对比TTFT指标
+
+开启prefill，结果如下
+
+```
+[perf] prompt_tokens=1371, generated_tokens=373, total_tokens=1744, inference_time=12.295s, TTFT=3.745s, tokens/s=141.85
+```
+
+不用prefill，结果如下
+
+```
+[perf] prompt_tokens=1371, generated_tokens=7581, total_tokens=8952, inference_time=196.526s, TTFT=196.526s, tokens/s=45.55
+```
