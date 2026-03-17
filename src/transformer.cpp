@@ -2,6 +2,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cassert>
 #include <cstdint>
 
 #include "config.h"
@@ -11,6 +12,85 @@
 #include "type.h"
 
 namespace toyinfer {
+namespace {
+
+void launch_prefill_flash_attention(const bf16* __restrict__ q_d,
+                                    const bf16* __restrict__ key_d,
+                                    const bf16* __restrict__ val_d,
+                                    bf16* __restrict__ o_d,
+                                    const LLMConfig& llmconfig,
+                                    uint32_t token_cnt) {
+    if (llmconfig.head_dim == 64) {
+        flash_attention_v1_bf16<32, 4, 64>(
+            q_d, key_d, val_d, o_d, llmconfig.num_attention_heads,
+            llmconfig.num_key_value_heads, llmconfig.head_dim, token_cnt);
+        return;
+    }
+    if (llmconfig.head_dim == 128) {
+        flash_attention_v1_bf16<32, 4, 128>(
+            q_d, key_d, val_d, o_d, llmconfig.num_attention_heads,
+            llmconfig.num_key_value_heads, llmconfig.head_dim, token_cnt);
+        return;
+    }
+    assert(false && "unsupported head_dim for prefill flash attention");
+}
+
+}  // namespace
+
+void Transformer::State::PrefillState::alloc(const LLMConfig& llmconfig,
+                                             uint32_t num_tokens) {
+    if (num_tokens <= capacity) {
+        return;
+    }
+    free();
+
+    const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
+    const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
+
+    cudaMalloc(&token_ids_d, sizeof(uint32_t) * num_tokens);
+    cudaMalloc(&hidden_d, sizeof(bf16) * num_tokens * llmconfig.hidden_size);
+    cudaMalloc(&residual_d, sizeof(bf16) * num_tokens * llmconfig.hidden_size);
+    cudaMalloc(&x_d, sizeof(bf16) * num_tokens * llmconfig.hidden_size);
+    cudaMalloc(&sum_d, sizeof(float) * num_tokens);
+    cudaMalloc(&q_d, sizeof(bf16) * num_tokens * q_dim);
+    cudaMalloc(&key_d, sizeof(bf16) * num_tokens * kv_dim);
+    cudaMalloc(&val_d, sizeof(bf16) * num_tokens * kv_dim);
+    cudaMalloc(&o_d, sizeof(bf16) * num_tokens * q_dim);
+    cudaMalloc(&gate_d,
+               sizeof(bf16) * num_tokens * llmconfig.intermediate_size);
+    cudaMalloc(&up_d, sizeof(bf16) * num_tokens * llmconfig.intermediate_size);
+    cudaMalloc(&intermedia_d,
+               sizeof(bf16) * num_tokens * llmconfig.intermediate_size);
+    capacity = num_tokens;
+}
+
+void Transformer::State::PrefillState::free() {
+    cudaFree(token_ids_d);
+    cudaFree(hidden_d);
+    cudaFree(residual_d);
+    cudaFree(x_d);
+    cudaFree(sum_d);
+    cudaFree(q_d);
+    cudaFree(key_d);
+    cudaFree(val_d);
+    cudaFree(o_d);
+    cudaFree(gate_d);
+    cudaFree(up_d);
+    cudaFree(intermedia_d);
+    token_ids_d = nullptr;
+    hidden_d = nullptr;
+    residual_d = nullptr;
+    x_d = nullptr;
+    sum_d = nullptr;
+    q_d = nullptr;
+    key_d = nullptr;
+    val_d = nullptr;
+    o_d = nullptr;
+    gate_d = nullptr;
+    up_d = nullptr;
+    intermedia_d = nullptr;
+    capacity = 0;
+}
 
 void Transformer::State::alloc(const Options& options,
                                const LLMConfig& llmconfig) {
@@ -82,6 +162,7 @@ void Transformer::State::free() {
     cudaFree(up_d);
     cudaFree(intermedia_d);
     cudaFree(logits_d);
+    prefill.free();
     for (uint32_t i = 0; i < 3; i++) {
         cudaStreamDestroy(stream_d[i]);
         cudaEventDestroy(event_d[i]);
@@ -103,6 +184,114 @@ Transformer::~Transformer() {
     if (logits_h != nullptr) {
         cudaFreeHost(logits_h);
     }
+}
+
+const float* Transformer::prefill(const uint32_t* token_ids,
+                                  uint32_t token_cnt) {
+    assert(token_cnt > 0);
+    assert(token_cnt <= static_cast<uint32_t>(options.max_seq_len));
+
+    const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
+    const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
+    state.prefill.alloc(llmconfig, token_cnt);
+
+    cudaMemcpy(state.prefill.token_ids_d, token_ids,
+               sizeof(uint32_t) * token_cnt, cudaMemcpyHostToDevice);
+    gather_embedding_bf16<NUM_THREADS>(
+        qwen3_.embed_tokens_d, state.prefill.token_ids_d,
+        state.prefill.hidden_d, token_cnt, llmconfig.hidden_size);
+
+    for (int i = 0; i < llmconfig.num_hidden_layers; ++i) {
+        const Qwen3::Layer& layer_ref = qwen3_.layer[i];
+        bf16* layer_key_cache =
+            state.key_cache_d + (i * options.max_seq_len * kv_dim);
+        bf16* layer_val_cache =
+            state.val_cache_d + (i * options.max_seq_len * kv_dim);
+
+        batch_rmsnorm_bf16<NUM_THREADS>(
+            state.prefill.hidden_d, layer_ref.input_layernorm_d,
+            state.prefill.residual_d, state.prefill.sum_d,
+            llmconfig.rms_norm_eps, token_cnt, llmconfig.hidden_size);
+
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.attention.q_proj_d, state.prefill.residual_d,
+            state.prefill.q_d, token_cnt, q_dim, llmconfig.hidden_size);
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.attention.k_proj_d, state.prefill.residual_d,
+            state.prefill.key_d, token_cnt, kv_dim, llmconfig.hidden_size);
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.attention.v_proj_d, state.prefill.residual_d,
+            state.prefill.val_d, token_cnt, kv_dim, llmconfig.hidden_size);
+
+        batch_multi_rmsnorm_bf16(
+            state.prefill.q_d, layer_ref.attention.q_norm_d, state.prefill.q_d,
+            llmconfig.rms_norm_eps, token_cnt, llmconfig.num_attention_heads,
+            llmconfig.head_dim);
+        batch_multi_rmsnorm_bf16(
+            state.prefill.key_d, layer_ref.attention.k_norm_d,
+            state.prefill.key_d, llmconfig.rms_norm_eps, token_cnt,
+            llmconfig.num_key_value_heads, llmconfig.head_dim);
+        batch_rope_bf16(state.prefill.q_d, state.inv_freq_d, token_cnt,
+                        llmconfig.num_attention_heads, llmconfig.head_dim);
+        batch_rope_bf16(state.prefill.key_d, state.inv_freq_d, token_cnt,
+                        llmconfig.num_key_value_heads, llmconfig.head_dim);
+
+        cudaMemcpy(layer_key_cache, state.prefill.key_d,
+                   sizeof(bf16) * token_cnt * kv_dim, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(layer_val_cache, state.prefill.val_d,
+                   sizeof(bf16) * token_cnt * kv_dim, cudaMemcpyDeviceToDevice);
+
+        launch_prefill_flash_attention(state.prefill.q_d, state.prefill.key_d,
+                                       state.prefill.val_d, state.prefill.o_d,
+                                       llmconfig, token_cnt);
+
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.attention.o_proj_d, state.prefill.o_d,
+            state.prefill.residual_d, token_cnt, llmconfig.hidden_size, q_dim);
+        batch_residual_add_bf16<NUM_THREADS>(state.prefill.residual_d,
+                                             state.prefill.hidden_d, token_cnt,
+                                             llmconfig.hidden_size);
+        cudaMemcpy(state.prefill.residual_d, state.prefill.hidden_d,
+                   sizeof(bf16) * token_cnt * llmconfig.hidden_size,
+                   cudaMemcpyDeviceToDevice);
+
+        batch_rmsnorm_bf16<NUM_THREADS>(
+            state.prefill.hidden_d, layer_ref.post_attention_layernorm_d,
+            state.prefill.x_d, state.prefill.sum_d, llmconfig.rms_norm_eps,
+            token_cnt, llmconfig.hidden_size);
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.ffn.gate_proj_d, state.prefill.x_d, state.prefill.gate_d,
+            token_cnt, llmconfig.intermediate_size, llmconfig.hidden_size);
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.ffn.up_proj_d, state.prefill.x_d, state.prefill.up_d,
+            token_cnt, llmconfig.intermediate_size, llmconfig.hidden_size);
+        batch_swiglu_bf16x2<NUM_THREADS>(
+            state.prefill.gate_d, state.prefill.up_d,
+            state.prefill.intermedia_d, token_cnt, llmconfig.intermediate_size);
+        batch_gemv_proj_bf16<NUM_THREADS>(
+            layer_ref.ffn.down_proj_d, state.prefill.intermedia_d,
+            state.prefill.hidden_d, token_cnt, llmconfig.hidden_size,
+            llmconfig.intermediate_size);
+        batch_residual_add_bf16<NUM_THREADS>(state.prefill.residual_d,
+                                             state.prefill.hidden_d, token_cnt,
+                                             llmconfig.hidden_size);
+    }
+
+    batch_rmsnorm_bf16<NUM_THREADS>(state.prefill.hidden_d, qwen3_.norm_d,
+                                    state.prefill.x_d, state.prefill.sum_d,
+                                    llmconfig.rms_norm_eps, token_cnt,
+                                    llmconfig.hidden_size);
+    // 拷贝最后一个去算logits就行
+    cudaMemcpy(state.x_d,
+               state.prefill.x_d + (token_cnt - 1) * static_cast<uint32_t>(
+                                                         llmconfig.hidden_size),
+               sizeof(bf16) * llmconfig.hidden_size, cudaMemcpyDeviceToDevice);
+    gemv_proj_bf162float<NUM_THREADS>(qwen3_.lmhead_d, state.x_d,
+                                      state.logits_d, llmconfig.vocab_size,
+                                      llmconfig.hidden_size);
+    cudaMemcpy(logits_h, state.logits_d, sizeof(float) * llmconfig.vocab_size,
+               cudaMemcpyDeviceToHost);
+    return logits_h;
 }
 
 const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
@@ -158,8 +347,8 @@ const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
                             llmconfig.num_attention_heads, llmconfig.head_dim,
                             state.stream_d[0]);
             rope_bf16_graph(state.key_d, state.inv_freq_d, state.pos_d,
-                            llmconfig.num_key_value_heads,
-                            llmconfig.head_dim, state.stream_d[1]);
+                            llmconfig.num_key_value_heads, llmconfig.head_dim,
+                            state.stream_d[1]);
             write_kv_cache_bf16<NUM_THREADS>(state.key_d, layer_key_cache,
                                              state.pos_d, kv_dim,
                                              state.stream_d[1]);
@@ -174,10 +363,9 @@ const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
             cudaStreamWaitEvent(state.stream_d[0], state.event_d[2]);
             attention_bf16_graph<NUM_THREADS, TILE_SEQ>(
                 state.q_d, layer_key_cache, layer_val_cache, state.score,
-                state.o_buffer_d, state.o_d,
-                llmconfig.num_attention_heads, llmconfig.num_key_value_heads,
-                llmconfig.head_dim, state.pos_d, options.max_seq_len,
-                state.stream_d[0]);
+                state.o_buffer_d, state.o_d, llmconfig.num_attention_heads,
+                llmconfig.num_key_value_heads, llmconfig.head_dim, state.pos_d,
+                options.max_seq_len, state.stream_d[0]);
             // o proj
             gemv_proj_bf16<NUM_THREADS>(
                 layer_ref.attention.o_proj_d, state.o_d, state.residual_d,

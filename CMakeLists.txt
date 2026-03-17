@@ -62,6 +62,7 @@ if(BUILD_TOYINFER_APP)
             "src/*.c"
             "src/*.cu"
         )
+        list(REMOVE_ITEM SRC_FILES "${CMAKE_SOURCE_DIR}/src/kernel.cu")
 
         add_executable(ToyInfer
             main.cpp
@@ -135,6 +136,11 @@ if(BUILD_TESTING)
     add_kernel_test(test_flash_attention_v1_bf16 tests/test_flash_attention_v1_bf16.cu)
     add_kernel_test(test_swiglu_bf16x2_kernel tests/test_swiglu_bf16x2_kernel.cu)
     add_kernel_test(test_swiglu_bf16x2 tests/test_swiglu_bf16x2.cu)
+    add_kernel_test(test_batch_gemv_proj_bf16 tests/test_batch_gemv_proj_bf16.cu)
+    add_kernel_test(test_batch_rmsnorm_bf16 tests/test_batch_rmsnorm_bf16.cu)
+    add_kernel_test(test_batch_multi_rmsnorm_bf16 tests/test_batch_multi_rmsnorm_bf16.cu)
+    add_kernel_test(test_batch_residual_add_bf16 tests/test_batch_residual_add_bf16.cu)
+    add_kernel_test(test_batch_swiglu_bf16x2 tests/test_batch_swiglu_bf16x2.cu)
 
     if(TOYINFER_APP_DEPS_READY)
         add_executable(test_tokenizer

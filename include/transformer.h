@@ -9,6 +9,25 @@ namespace toyinfer {
 
 class Transformer {
     struct State {
+        struct PrefillState {
+            uint32_t capacity = 0;
+            uint32_t* token_ids_d = nullptr;
+            bf16* hidden_d = nullptr;
+            bf16* residual_d = nullptr;
+            bf16* x_d = nullptr;
+            float* sum_d = nullptr;
+            bf16* q_d = nullptr;
+            bf16* key_d = nullptr;
+            bf16* val_d = nullptr;
+            bf16* o_d = nullptr;
+            bf16* gate_d = nullptr;
+            bf16* up_d = nullptr;
+            bf16* intermedia_d = nullptr;
+
+            void alloc(const LLMConfig& llmconfig, uint32_t num_tokens);
+            void free();
+        };
+
         uint32_t* pos_h;  // dim = 1
         uint32_t* pos_d;  // dim = 1
         bf16* hidden_d;   // hidden state, [hidden_size]
@@ -40,6 +59,7 @@ class Transformer {
         cudaEvent_t event_d[3];
         cudaGraph_t graph_d = nullptr;
         cudaGraphExec_t graph_exec_d = nullptr;
+        PrefillState prefill;
 
         void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
@@ -55,6 +75,7 @@ class Transformer {
    public:
     Transformer(const Options& options, const LLMConfig& config);
     ~Transformer();
+    const float* prefill(const uint32_t* token_ids, uint32_t token_cnt);
     const float* forward(uint32_t token_id, uint32_t pos);
 };
 }  // namespace toyinfer

@@ -228,11 +228,19 @@ float beam_score(const Beam& beam, uint32_t prompt_len, float length_penalty) {
 
 const float* compute_logits_for_tokens(Transformer& transformer,
                                        const std::vector<uint32_t>& tokens) {
-    const float* logits = nullptr;
-    for (size_t pos = 0; pos < tokens.size(); ++pos) {
-        logits = transformer.forward(tokens[pos], static_cast<uint32_t>(pos));
+    if (tokens.empty()) {
+        return nullptr;
     }
-    return logits;
+    return transformer.prefill(tokens.data(),
+                               static_cast<uint32_t>(tokens.size()));
+}
+
+const float* run_prompt_prefill(Transformer& transformer,
+                                const uint32_t* token_ids, uint32_t token_cnt) {
+    if (token_ids == nullptr || token_cnt == 0) {
+        return nullptr;
+    }
+    return transformer.prefill(token_ids, token_cnt);
 }
 }  // namespace
 
@@ -276,25 +284,16 @@ void Engine::chat() {
         stats.prompt_tokens = token_cnt;
         stats.start_time = std::chrono::steady_clock::now();
         if (options.beam_size <= 1) {
-            uint32_t pos = 0;
-            uint32_t token_id;
-            uint32_t next_token_id = 0;
-            bool assistance_end = false;
-            const float* logits_h = nullptr;
-            while (assistance_end == false &&
-                   pos < static_cast<uint32_t>(options.max_seq_len)) {
-                if (pos < token_cnt) {
-                    token_id = token_ids[pos];
-                } else {
-                    token_id = next_token_id;
-                }
-                logits_h = transformer.forward(token_id, pos);
-                next_token_id = sampler.sample(logits_h);
-                // printf("next token id: %d\n", next_token_id);
-                if ((pos + 1) < token_cnt) {
-                    next_token_id = token_ids[pos + 1];
-                } else {
-                    stats_ttft_record(stats);
+            if (token_cnt > 0 &&
+                token_cnt < static_cast<uint32_t>(options.max_seq_len)) {
+                const float* logits_h =
+                    run_prompt_prefill(transformer, token_ids.get(), token_cnt);
+                uint32_t pos = token_cnt;
+                uint32_t next_token_id = sampler.sample(logits_h);
+                bool assistance_end = false;
+                stats_ttft_record(stats);
+                while (assistance_end == false &&
+                       pos < static_cast<uint32_t>(options.max_seq_len)) {
                     if (next_token_id ==
                         static_cast<uint32_t>(llm_config.eos_token_id)) {
                         assistance_end = true;
@@ -305,8 +304,15 @@ void Engine::chat() {
                                         format_state);
                         fflush(stdout);
                     }
+                    if (assistance_end ||
+                        (pos + 1) >=
+                            static_cast<uint32_t>(options.max_seq_len)) {
+                        break;
+                    }
+                    logits_h = transformer.forward(next_token_id, pos);
+                    next_token_id = sampler.sample(logits_h);
+                    pos++;
                 }
-                pos++;
             }
         } else {
             const uint32_t prompt_len = token_cnt;
