@@ -145,13 +145,19 @@ struct Beam {
 struct InferenceStats {
     uint32_t prompt_tokens = 0;
     uint32_t generated_tokens = 0;
+    double ttft;
     std::chrono::steady_clock::time_point start_time;
     std::chrono::steady_clock::time_point end_time;
 };
 
+void stats_ttft_record(InferenceStats& stats) {
+    std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::now();
+    stats.ttft = std::chrono::duration<double>(now - stats.start_time).count();
+}
+
 void print_inference_stats(const InferenceStats& stats) {
-    const uint32_t total_tokens =
-        stats.prompt_tokens + stats.generated_tokens;
+    const uint32_t total_tokens = stats.prompt_tokens + stats.generated_tokens;
     const double inference_time =
         std::chrono::duration<double>(stats.end_time - stats.start_time)
             .count();
@@ -162,9 +168,9 @@ void print_inference_stats(const InferenceStats& stats) {
 
     std::printf(
         "[perf] prompt_tokens=%u, generated_tokens=%u, total_tokens=%u, "
-        "inference_time=%.3fs, tokens/s=%.2f\n",
+        "inference_time=%.3fs, TTFT=%.3fs, tokens/s=%.2f\n",
         stats.prompt_tokens, stats.generated_tokens, total_tokens,
-        inference_time, tokens_per_sec);
+        inference_time, stats.ttft, tokens_per_sec);
 }
 
 float compute_log_z(const float* logits, uint32_t vocab_size) {
@@ -288,6 +294,7 @@ void Engine::chat() {
                 if ((pos + 1) < token_cnt) {
                     next_token_id = token_ids[pos + 1];
                 } else {
+                    stats_ttft_record(stats);
                     if (next_token_id ==
                         static_cast<uint32_t>(llm_config.eos_token_id)) {
                         assistance_end = true;
