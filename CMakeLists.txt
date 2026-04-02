@@ -63,6 +63,7 @@ if(BUILD_TOYINFER_APP)
             "src/*.cu"
         )
         list(REMOVE_ITEM SRC_FILES "${CMAKE_SOURCE_DIR}/src/kernel.cu")
+        list(REMOVE_ITEM SRC_FILES "${CMAKE_SOURCE_DIR}/src/engine.cpp")
 
         add_executable(ToyInfer
             main.cpp
@@ -78,6 +79,12 @@ if(BUILD_TOYINFER_APP)
             jsoncpp_static
             linenoise
         )
+
+        if(TARGET CUDA::nvtx3)
+            target_link_libraries(ToyInfer PRIVATE CUDA::nvtx3)
+        elseif(TARGET CUDA::nvToolsExt)
+            target_link_libraries(ToyInfer PRIVATE CUDA::nvToolsExt)
+        endif()
 
         target_precompile_headers(ToyInfer PRIVATE
             <spdlog/spdlog.h>

@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "options.h"
+#include "profiling.h"
 #include "spdlog/spdlog.h"
 #define DEFAULT_PROMPT_SIZE 1024
 
@@ -174,6 +175,7 @@ void Tokenizer::load_chat_template(char*& buffer, const char* filename) {
 
 void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
                        uint32_t& token_count) {
+    ScopedNvtxRange encode_range("tokenizer.encode");
     token_ids = std::make_unique<uint32_t[]>(strlen(text));
     token_count = 0;
     uint32_t token_id = 0;
@@ -325,6 +327,7 @@ void Tokenizer::encode(const char* text, std::unique_ptr<uint32_t[]>& token_ids,
 }
 
 const char* Tokenizer::decode(const uint32_t token_ids) {
+    ScopedNvtxRange decode_range("tokenizer.decode");
     if (token_ids < vocab_size_) {
         return vocab_[token_ids];
     }
@@ -334,6 +337,7 @@ const char* Tokenizer::decode(const uint32_t token_ids) {
 void Tokenizer::render_prompt(std::unique_ptr<char[]>& prompt,
                               const char* user_prompt,
                               const char* system_prompt) {
+    ScopedNvtxRange render_range("tokenizer.render_prompt");
     if (system_prompt != nullptr && user_prompt != nullptr) {
         // 返回的是不含\0的长度
         int prompt_len = std::snprintf(nullptr, 0, system_prompt_template,

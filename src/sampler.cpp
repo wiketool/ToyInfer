@@ -1,7 +1,12 @@
 #include "sampler.h"
 
+#include <algorithm>
 #include <cfloat>
+#include <chrono>
+#include <cmath>
 #include <random>
+
+#include "profiling.h"
 namespace toyinfer {
 
 Sampler::Sampler(const LLMConfig& llmconfig, const Options& options)
@@ -11,6 +16,7 @@ Sampler::Sampler(const LLMConfig& llmconfig, const Options& options)
 
 // topK -> softmax ->topP -> minP
 int32_t Sampler::sample(const float* logits) {
+    ScopedNvtxRange sample_range("sampler.sample");
     if (fabs(options.temperature - 0.0f) < 1e-3 || options.top_k == 1) {
         return argmax(logits);
     }

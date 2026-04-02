@@ -1,10 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "config.h"
 #include "options.h"
+#include "profiling.h"
 #include "qwen3.h"
+
 namespace toyinfer {
 
 class Transformer {
@@ -25,6 +28,29 @@ class Transformer {
             bf16* intermedia_d = nullptr;
 
             void alloc(const LLMConfig& llmconfig, uint32_t num_tokens);
+            void free();
+        };
+
+        struct TimingEvents {
+            bool enabled = false;
+
+            cudaEvent_t prefill_total_start = nullptr;
+            cudaEvent_t prefill_total_end = nullptr;
+            std::vector<cudaEvent_t> prefill_attn_start;
+            std::vector<cudaEvent_t> prefill_attn_end;
+            std::vector<cudaEvent_t> prefill_mlp_start;
+            std::vector<cudaEvent_t> prefill_mlp_end;
+
+            cudaEvent_t decode_total_start = nullptr;
+            cudaEvent_t decode_total_end = nullptr;
+            std::vector<cudaEvent_t> decode_qkv_start;
+            std::vector<cudaEvent_t> decode_qkv_end;
+            std::vector<cudaEvent_t> decode_attention_start;
+            std::vector<cudaEvent_t> decode_attention_end;
+            std::vector<cudaEvent_t> decode_mlp_start;
+            std::vector<cudaEvent_t> decode_mlp_end;
+
+            void alloc(uint32_t layers, bool enable_timing);
             void free();
         };
 
@@ -60,6 +86,7 @@ class Transformer {
         cudaGraph_t graph_d = nullptr;
         cudaGraphExec_t graph_exec_d = nullptr;
         PrefillState prefill;
+        TimingEvents timing;
 
         void alloc(const Options& options, const LLMConfig& llmconfig);
         void free();
@@ -71,11 +98,19 @@ class Transformer {
     Qwen3 qwen3_;
     State state;
     float* logits_h = nullptr;
+    TransformerProfileStats profile_stats_;
+
+    void run_decode_body();
+    void accumulate_prefill_profile();
+    void accumulate_decode_profile();
 
    public:
     Transformer(const Options& options, const LLMConfig& config);
     ~Transformer();
     const float* prefill(const uint32_t* token_ids, uint32_t token_cnt);
     const float* forward(uint32_t token_id, uint32_t pos);
+    void reset_profile();
+    const TransformerProfileStats& profile_stats() const;
 };
+
 }  // namespace toyinfer

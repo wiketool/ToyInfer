@@ -131,5 +131,6 @@ void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
                              const bf16* __restrict__ Vs, bf16* __restrict__ Os,
                              const uint32_t num_q_heads,
                              const uint32_t num_kv_heads,
-                             const uint32_t heads_dim, const uint32_t seq_len);
+                             const uint32_t heads_dim, const uint32_t seq_len,
+                             cudaStream_t stream_d = nullptr);
 }  // namespace toyinfer

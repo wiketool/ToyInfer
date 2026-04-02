@@ -390,11 +390,14 @@ void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
                              const bf16* __restrict__ Vs, bf16* __restrict__ Os,
                              const uint32_t num_q_heads,
                              const uint32_t num_kv_heads,
-                             const uint32_t heads_dim, const uint32_t seq_len) {
+                             const uint32_t heads_dim,
+                             const uint32_t seq_len,
+                             cudaStream_t stream_d) {
     const dim3 block_dim{Bc, Br};
     const dim3 grid_dim{num_q_heads, (seq_len + Br - 1) / Br};
-    flash_attention_v1_bf16_kernel<Bc, Br, HEAD_DIM><<<grid_dim, block_dim>>>(
-        Qs, Ks, Vs, Os, num_q_heads, num_kv_heads, heads_dim, seq_len);
+    flash_attention_v1_bf16_kernel<Bc, Br, HEAD_DIM>
+        <<<grid_dim, block_dim, 0, stream_d>>>(
+            Qs, Ks, Vs, Os, num_q_heads, num_kv_heads, heads_dim, seq_len);
 }
 
 template <const uint32_t NUM_THREADS>
@@ -437,21 +440,25 @@ template void flash_attention_v1_bf16<32, 2, 64>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len);
+    const uint32_t heads_dim, const uint32_t seq_len,
+    cudaStream_t stream_d);
 template void flash_attention_v1_bf16<32, 4, 64>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len);
+    const uint32_t heads_dim, const uint32_t seq_len,
+    cudaStream_t stream_d);
 template void flash_attention_v1_bf16<32, 4, 128>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len);
+    const uint32_t heads_dim, const uint32_t seq_len,
+    cudaStream_t stream_d);
 template void flash_attention_v1_bf16<64, 4, 128>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len);
+    const uint32_t heads_dim, const uint32_t seq_len,
+    cudaStream_t stream_d);
 
 }  // namespace toyinfer
