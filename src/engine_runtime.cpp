@@ -461,7 +461,7 @@ void Engine::chat() {
                             static_cast<uint32_t>(options.max_seq_len)) {
                         break;
                     }
-                    if(options.bench != "" && pos > input_len + 64){
+                    if(options.bench != "" && pos > input_len + 1024){
                         break;
                     }
                     logits_h = transformer.forward(next_token_id, pos);
@@ -574,6 +574,8 @@ void Engine::chat() {
                               options.detail_time);
         if (options.bench == "") {
             linenoiseFree(line);
+        }else{
+            return;
         }
     }
 }
