@@ -173,9 +173,8 @@ void record_ttft(InferenceStats& stats) {
 void finalize_stats(InferenceStats& stats) {
     stats.end_time = std::chrono::steady_clock::now();
     if (stats.generated_tokens > 1 && stats.ttft_recorded) {
-        stats.tpot_ms =
-            elapsed_ms(stats.first_token_time, stats.end_time) /
-            static_cast<double>(stats.generated_tokens - 1);
+        stats.tpot_ms = elapsed_ms(stats.first_token_time, stats.end_time) /
+                        static_cast<double>(stats.generated_tokens - 1);
     } else {
         stats.tpot_ms = 0.0;
     }
@@ -316,13 +315,12 @@ const float* replay_prompt_with_decode(Transformer& transformer,
 
 const float* run_prompt_prefill(Transformer& transformer,
                                 const Options& options,
-                                const uint32_t* token_ids,
-                                uint32_t token_cnt) {
+                                const uint32_t* token_ids, uint32_t token_cnt) {
     if (token_ids == nullptr || token_cnt == 0) {
         return nullptr;
     }
-    ScopedNvtxRange prefill_range(
-        options.use_dedicated_prefill ? "engine.prompt_prefill.dedicated"
+    ScopedNvtxRange prefill_range(options.use_dedicated_prefill
+                                      ? "engine.prompt_prefill.dedicated"
                                       : "engine.prompt_prefill.decode_replay");
     if (options.use_dedicated_prefill) {
         return transformer.prefill(token_ids, token_cnt);
@@ -339,6 +337,38 @@ const float* compute_logits_for_tokens(Transformer& transformer,
     return run_prompt_prefill(transformer, options, tokens.data(),
                               static_cast<uint32_t>(tokens.size()));
 }
+
+static void build_profile_token_sequence(
+    Tokenizer& tokenizer, uint32_t target_len,
+    std::unique_ptr<uint32_t[]>& out_token_ids, uint32_t& out_token_cnt,
+    const char* seed_text =
+        "这是一个用于大模型推理性能分析的固定中文测试样本。"
+        "我们会重复这段文本来构造稳定且可复现的输入序列，"
+        "用于测量prefill、decode、TTFT以及各类CUDA算子的耗时表现。") {
+    out_token_ids.reset();
+    out_token_cnt = 0;
+
+    if (target_len == 0) {
+        return;
+    }
+
+    // 1) 先把 seed 文本编码成一段合法 token pattern
+    std::unique_ptr<uint32_t[]> seed_token_ids;
+    uint32_t seed_token_cnt = 0;
+    tokenizer.encode(seed_text, seed_token_ids, seed_token_cnt);
+
+    if (seed_token_cnt == 0) {
+        throw std::runtime_error(
+            "build_profile_token_sequence: seed_token_cnt == 0");
+    }
+
+    // 2) 按 pattern 循环填充到目标长度
+    out_token_ids = std::make_unique<uint32_t[]>(target_len);
+    for (uint32_t i = 0; i < target_len; ++i) {
+        out_token_ids[i] = seed_token_ids[i % seed_token_cnt];
+    }
+    out_token_cnt = target_len;
+}
 }  // namespace
 
 Engine::Engine(Options& options)
@@ -354,39 +384,43 @@ Engine::Engine(Options& options)
 
 void Engine::chat() {
     while (1) {
-        const char* console = "ToyInfer> ";
-        char* line = linenoise(console);
-        if (line == nullptr) {
-            continue;
-        }
-        if (strcmp(line, "\\quit") == 0) {
-            break;
-        }
-
         ScopedNvtxRange turn_range("engine.chat.turn");
         transformer.reset_profile();
-
         InferenceStats stats;
         stats.e2e_start = std::chrono::steady_clock::now();
-
         std::unique_ptr<uint32_t[]> token_ids;
         uint32_t token_cnt;
-        std::unique_ptr<char[]> prompt;
-        tokenizer.render_prompt(prompt, line, nullptr);
+        char* line;
+        if (options.bench == "") {
+            const char* console = "ToyInfer> ";
+            line = linenoise(console);
+            if (line == nullptr) {
+                continue;
+            }
+            if (strcmp(line, "\\quit") == 0) {
+                break;
+            }
+            std::unique_ptr<char[]> prompt;
+            tokenizer.render_prompt(prompt, line, nullptr);
 #ifdef DEBUG
-        std::cout << prompt.get() << std::endl;
+            std::cout << prompt.get() << std::endl;
 #endif
-        {
-            ScopedCpuTimer timer(stats.tokenizer_encode_ms);
-            tokenizer.encode(prompt.get(), token_ids, token_cnt);
-        }
+            {
+                ScopedCpuTimer timer(stats.tokenizer_encode_ms);
+                tokenizer.encode(prompt.get(), token_ids, token_cnt);
+            }
 #ifdef DEBUG
-        for (uint32_t i = 0; i < token_cnt; i++) {
-            std::cout << token_ids[i] << " ";
-        }
-        std::cout << std::endl;
+            for (uint32_t i = 0; i < token_cnt; i++) {
+                std::cout << token_ids[i] << " ";
+            }
+            std::cout << std::endl;
 #endif
-
+        } else if (options.bench == "short") {
+            build_profile_token_sequence(tokenizer, 64, token_ids, token_cnt);
+        } else if (options.bench == "long") {
+            build_profile_token_sequence(tokenizer, 4096, token_ids, token_cnt);
+        }
+        int input_len = token_cnt;
         FormatState format_state;
         stats.prompt_tokens = token_cnt;
         stats.inference_start = std::chrono::steady_clock::now();
@@ -419,9 +453,11 @@ void Engine::chat() {
                             static_cast<uint32_t>(options.max_seq_len)) {
                         break;
                     }
+                    if(options.bench != "" && pos > input_len + 64){
+                        break;
+                    }
                     logits_h = transformer.forward(next_token_id, pos);
-                    next_token_id =
-                        sample_with_stats(sampler, logits_h, stats);
+                    next_token_id = sample_with_stats(sampler, logits_h, stats);
                     pos++;
                 }
             }
@@ -528,7 +564,9 @@ void Engine::chat() {
         finalize_stats(stats);
         print_inference_stats(stats, transformer.profile_stats(),
                               options.detail_time);
-        linenoiseFree(line);
+        if (options.bench == "") {
+            linenoiseFree(line);
+        }
     }
 }
 

@@ -26,6 +26,9 @@ void Options::options_from_cli(CLI::App& app) {
                    "Print detailed tokenizer, generation, and CUDA stage "
                    "timings")
         ->default_val(false);
+    app.add_option("--bench", bench,
+                   "Bench: [short,long]")
+        ->default_val("");
     app.add_option("--temperature", temperature)->default_val(0.6);
     app.add_option("--top_k", top_k)->default_val(20);
     app.add_option("--top_p", top_p)->default_val(0.95);

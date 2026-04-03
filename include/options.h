@@ -12,6 +12,7 @@ struct Options {
     bool use_multi_stream = true;
     bool enable_cuda_graph = true;
     bool detail_time = false;
+    std::string bench;
 
     // sample options
     float temperature = 0.6f;
