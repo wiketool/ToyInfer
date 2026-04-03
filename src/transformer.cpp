@@ -274,7 +274,11 @@ Transformer::~Transformer() {
     }
 }
 
-void Transformer::reset_profile() { profile_stats_.reset(); }
+void Transformer::reset_profile() {
+    profile_stats_.reset();
+    profile_stats_.decode_layer_stage_timing_available =
+        !options.enable_cuda_graph;
+}
 
 const TransformerProfileStats& Transformer::profile_stats() const {
     return profile_stats_;
@@ -304,6 +308,9 @@ void Transformer::accumulate_decode_profile() {
     profile_stats_.decode_forward_total_ms +=
         cuda_elapsed_ms(state.timing.decode_total_start,
                         state.timing.decode_total_end);
+    if (!profile_stats_.decode_layer_stage_timing_available) {
+        return;
+    }
     for (size_t i = 0; i < state.timing.decode_qkv_start.size(); ++i) {
         profile_stats_.decode_layer_qkv_and_cache_ms +=
             cuda_elapsed_ms(state.timing.decode_qkv_start[i],
@@ -473,7 +480,7 @@ const float* Transformer::prefill(const uint32_t* token_ids,
     return logits_h;
 }
 
-void Transformer::run_decode_body() {
+void Transformer::run_decode_body(bool record_timing_events) {
     const uint32_t kv_dim = llmconfig.head_dim * llmconfig.num_key_value_heads;
     const uint32_t q_dim = llmconfig.head_dim * llmconfig.num_attention_heads;
     const bool use_multi_stream = options.use_multi_stream;
@@ -481,7 +488,7 @@ void Transformer::run_decode_body() {
     cudaStream_t stream1 = use_multi_stream ? state.stream_d[1] : stream0;
     cudaStream_t stream2 = use_multi_stream ? state.stream_d[2] : stream0;
 
-    if (state.timing.enabled) {
+    if (record_timing_events) {
         CHECK_CUDA(cudaEventRecord(state.timing.decode_total_start, stream0));
     }
     CHECK_CUDA(cudaMemcpyAsync(state.pos_d, state.pos_h, sizeof(uint32_t),
@@ -496,7 +503,7 @@ void Transformer::run_decode_body() {
         bf16* layer_val_cache =
             state.val_cache_d + (i * options.max_seq_len * kv_dim);
 
-        if (state.timing.enabled) {
+        if (record_timing_events) {
             CHECK_CUDA(
                 cudaEventRecord(state.timing.decode_qkv_start[i], stream0));
         }
@@ -551,7 +558,7 @@ void Transformer::run_decode_body() {
                 CHECK_CUDA(cudaStreamWaitEvent(stream0, state.event_d[2]));
             }
         }
-        if (state.timing.enabled) {
+        if (record_timing_events) {
             CHECK_CUDA(cudaEventRecord(state.timing.decode_qkv_end[i], stream0));
             CHECK_CUDA(cudaEventRecord(state.timing.decode_attention_start[i],
                                        stream0));
@@ -578,7 +585,7 @@ void Transformer::run_decode_body() {
                 state.sum_d, llmconfig.rms_norm_eps, llmconfig.hidden_size,
                 stream0);
         }
-        if (state.timing.enabled) {
+        if (record_timing_events) {
             CHECK_CUDA(cudaEventRecord(state.timing.decode_attention_end[i],
                                        stream0));
             CHECK_CUDA(
@@ -611,7 +618,7 @@ void Transformer::run_decode_body() {
             residual_add_bf16<NUM_THREADS>(state.residual_d, state.hidden_d,
                                            llmconfig.hidden_size, stream0);
         }
-        if (state.timing.enabled) {
+        if (record_timing_events) {
             CHECK_CUDA(
                 cudaEventRecord(state.timing.decode_mlp_end[i], stream0));
         }
@@ -623,7 +630,7 @@ void Transformer::run_decode_body() {
     gemv_proj_bf162float<NUM_THREADS>(qwen3_.lmhead_d, state.x_d,
                                       state.logits_d, llmconfig.vocab_size,
                                       llmconfig.hidden_size, stream0);
-    if (state.timing.enabled) {
+    if (record_timing_events) {
         CHECK_CUDA(cudaEventRecord(state.timing.decode_total_end, stream0));
     }
 }
@@ -643,15 +650,25 @@ const float* Transformer::forward(uint32_t token_id, uint32_t pos) {
             CHECK_CUDA(
                 cudaStreamBeginCapture(state.stream_d[0],
                                        cudaStreamCaptureModeGlobal));
-            run_decode_body();
+            // CUDA graph capture does not preserve decode layer timing in a form
+            // that can be consumed via cudaEventElapsedTime().
+            run_decode_body(false);
             CHECK_CUDA(cudaStreamEndCapture(state.stream_d[0], &state.graph_d));
             CHECK_CUDA(
                 cudaGraphInstantiate(&state.graph_exec_d, state.graph_d));
         }
         ScopedNvtxRange launch_range("transformer.forward.graph_launch");
+        if (state.timing.enabled) {
+            CHECK_CUDA(
+                cudaEventRecord(state.timing.decode_total_start, state.stream_d[0]));
+        }
         CHECK_CUDA(cudaGraphLaunch(state.graph_exec_d, state.stream_d[0]));
+        if (state.timing.enabled) {
+            CHECK_CUDA(
+                cudaEventRecord(state.timing.decode_total_end, state.stream_d[0]));
+        }
     } else {
-        run_decode_body();
+        run_decode_body(state.timing.enabled);
     }
 
     CHECK_CUDA(cudaStreamSynchronize(state.stream_d[0]));

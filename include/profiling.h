@@ -102,6 +102,7 @@ struct TransformerProfileStats {
     double decode_layer_qkv_and_cache_ms = 0.0;
     double decode_layer_attention_ms = 0.0;
     double decode_layer_mlp_ms = 0.0;
+    bool decode_layer_stage_timing_available = true;
 
     void reset() { *this = TransformerProfileStats{}; }
 };

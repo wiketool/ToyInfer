@@ -100,7 +100,7 @@ class Transformer {
     float* logits_h = nullptr;
     TransformerProfileStats profile_stats_;
 
-    void run_decode_body();
+    void run_decode_body(bool record_timing_events);
     void accumulate_prefill_profile();
     void accumulate_decode_profile();
 

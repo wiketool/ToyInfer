@@ -244,12 +244,20 @@ void print_inference_stats(const InferenceStats& stats,
                 transformer_profile.prefill_layer_mlp_block_ms);
     std::printf("[detail] decode_forward_total=%.3f ms\n",
                 transformer_profile.decode_forward_total_ms);
-    std::printf("[detail] decode.layer.qkv_and_cache=%.3f ms\n",
-                transformer_profile.decode_layer_qkv_and_cache_ms);
-    std::printf("[detail] decode.layer.attention=%.3f ms\n",
-                transformer_profile.decode_layer_attention_ms);
-    std::printf("[detail] decode.layer.mlp=%.3f ms\n",
-                transformer_profile.decode_layer_mlp_ms);
+    if (transformer_profile.decode_layer_stage_timing_available) {
+        std::printf("[detail] decode.layer.qkv_and_cache=%.3f ms\n",
+                    transformer_profile.decode_layer_qkv_and_cache_ms);
+        std::printf("[detail] decode.layer.attention=%.3f ms\n",
+                    transformer_profile.decode_layer_attention_ms);
+        std::printf("[detail] decode.layer.mlp=%.3f ms\n",
+                    transformer_profile.decode_layer_mlp_ms);
+    } else {
+        std::printf(
+            "[detail] decode.layer.qkv_and_cache=N/A (CUDA graph enabled)\n");
+        std::printf(
+            "[detail] decode.layer.attention=N/A (CUDA graph enabled)\n");
+        std::printf("[detail] decode.layer.mlp=N/A (CUDA graph enabled)\n");
+    }
 }
 
 float compute_log_z(const float* logits, uint32_t vocab_size) {
