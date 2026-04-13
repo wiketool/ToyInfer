@@ -237,7 +237,8 @@ __global__ void flash_attention_v1_bf16_kernel(
     __shared__ float s_l[Br];
     // shape(s_O) = (Br,head_dim)
     __shared__ float s_O[Br][HEAD_DIM];
-    __shared__ float s_warp[Br][Bc / 32];
+    __shared__ float s_warp_max[Br][Bc / 32];
+    __shared__ float s_warp_sum[Br][Bc / 32];
     //
     float reg_score = 0.0f;
     float reg_max = 0.0f;
@@ -315,41 +316,32 @@ __global__ void flash_attention_v1_bf16_kernel(
         // reduce
         __syncthreads();
         reg_max = reduce_max_f32_warp(reg_score);
+        reg_sum = reduce_sum_f32_warp(expf(reg_score));
         if (lane_id == 0) {
-            s_warp[q_tile][warp_id] = reg_max;
+            s_warp_max[q_tile][warp_id] = reg_max;
+            s_warp_sum[q_tile][warp_id] = reg_sum;
         }
         __syncthreads();
         if (warp_id == 0) {
             reg_max =
-                lane_id < num_warps ? s_warp[q_tile][lane_id] : -CUDART_INF_F;
+                lane_id < num_warps ? s_warp_max[q_tile][lane_id] : -CUDART_INF_F;
             reg_max = reduce_max_f32_warp(reg_max);
+            reg_sum = lane_id < num_warps ? s_warp_sum[q_tile][lane_id] : 0.0f;
+            reg_sum = reduce_sum_f32_warp(reg_sum);
         }
         if (tx == 0) {
-            s_warp[q_tile][0] = reg_max;
+            s_warp_max[q_tile][0] = reg_max;
+            s_warp_sum[q_tile][0] = reg_sum;
         }
         __syncthreads();
-        reg_max = s_warp[q_tile][0];
+        reg_max = s_warp_max[q_tile][0];
+        reg_sum = s_warp_sum[q_tile][0];
         reg_max = fmaxf(s_m[q_tile], reg_max);
         reg_delta = s_m[q_tile] - reg_max;
         reg_score = expf(reg_score - reg_max);
         s_score[q_tile][kv_tile] = reg_score;
+        reg_sum = reg_sum * expf(-reg_max);
 
-        float reg_sum_local = reg_score;
-        reg_sum_local = reduce_sum_f32_warp(reg_sum_local);
-        if (lane_id == 0) {
-            s_warp[q_tile][warp_id] = reg_sum_local;
-        }
-        __syncthreads();
-        if (warp_id == 0) {
-            reg_sum_local =
-                lane_id < num_warps ? s_warp[q_tile][lane_id] : 0.0f;
-            reg_sum_local = reduce_sum_f32_warp(reg_sum_local);
-        }
-        if (tx == 0) {
-            s_warp[q_tile][0] = reg_sum_local;
-        }
-        __syncthreads();
-        reg_sum = s_warp[q_tile][0];
         // 计算O
         for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
             reg_d[dim_slice] = 0;
@@ -390,8 +382,7 @@ void flash_attention_v1_bf16(const bf16* __restrict__ Qs,
                              const bf16* __restrict__ Vs, bf16* __restrict__ Os,
                              const uint32_t num_q_heads,
                              const uint32_t num_kv_heads,
-                             const uint32_t heads_dim,
-                             const uint32_t seq_len,
+                             const uint32_t heads_dim, const uint32_t seq_len,
                              cudaStream_t stream_d) {
     const dim3 block_dim{Bc, Br};
     const dim3 grid_dim{num_q_heads, (seq_len + Br - 1) / Br};
@@ -440,25 +431,21 @@ template void flash_attention_v1_bf16<32, 2, 64>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len,
-    cudaStream_t stream_d);
+    const uint32_t heads_dim, const uint32_t seq_len, cudaStream_t stream_d);
 template void flash_attention_v1_bf16<32, 4, 64>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len,
-    cudaStream_t stream_d);
+    const uint32_t heads_dim, const uint32_t seq_len, cudaStream_t stream_d);
 template void flash_attention_v1_bf16<32, 4, 128>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len,
-    cudaStream_t stream_d);
+    const uint32_t heads_dim, const uint32_t seq_len, cudaStream_t stream_d);
 template void flash_attention_v1_bf16<64, 4, 128>(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
     const bf16* __restrict__ Vs, bf16* __restrict__ Os,
     const uint32_t num_q_heads, const uint32_t num_kv_heads,
-    const uint32_t heads_dim, const uint32_t seq_len,
-    cudaStream_t stream_d);
+    const uint32_t heads_dim, const uint32_t seq_len, cudaStream_t stream_d);
 
 }  // namespace toyinfer
