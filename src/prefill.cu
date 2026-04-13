@@ -217,6 +217,10 @@ void batch_rope_bf16(bf16* qk_ptr, const float* __restrict__ inv_freq,
     CUDA_CHECK(cudaGetLastError());
 }
 
+__device__ uint32_t swizzle_k(uint32_t row, uint32_t col){
+    return col ^ (row & 31);
+}
+
 template <const uint32_t Bc, const uint32_t Br, const uint32_t HEAD_DIM>
 __global__ void flash_attention_v1_bf16_kernel(
     const bf16* __restrict__ Qs, const bf16* __restrict__ Ks,
@@ -294,10 +298,10 @@ __global__ void flash_attention_v1_bf16_kernel(
             const uint32_t row_global = i * Bc + row;
             const uint32_t col_global = kv_head_idx * heads_dim + col;
             if (row_global < seq_len) {
-                s_K[row][col] = Ks[row_global * kv_dim + col_global];
+                s_K[row][swizzle_k(row,col)] = Ks[row_global * kv_dim + col_global];
                 s_V[row][col] = Vs[row_global * kv_dim + col_global];
             } else {
-                s_K[row][col] = bf16{0.0f};
+                s_K[row][swizzle_k(row,col)] = bf16{0.0f};
                 s_V[row][col] = bf16{0.0f};
             }
         }
@@ -306,7 +310,7 @@ __global__ void flash_attention_v1_bf16_kernel(
         // (Q*K)/sqrt(d)
         for (uint32_t j = 0; j < heads_dim; j++) {
             reg_score = fmaf(__bfloat162float(s_Q[q_tile][j]),
-                             __bfloat162float(s_K[kv_tile][j]), reg_score);
+                             __bfloat162float(s_K[kv_tile][swizzle_k(kv_tile,j)]), reg_score);
         }
         reg_score *= rsqrtf(heads_dim);
         if (q_idx < kv_idx || q_idx >= seq_len || kv_idx >= seq_len) {
