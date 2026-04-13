@@ -5,3 +5,5 @@ compile_commands.json
 models
 build-debug
 .vscode/settings.json
+*.ncu-rep
+*.nsys-rep

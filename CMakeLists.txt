@@ -104,6 +104,7 @@ if(BUILD_TOYINFER_APP)
 
         if (CMAKE_CUDA_COMPILER_ID MATCHES "NVIDIA")
             target_compile_options(ToyInfer PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-w>)
+            target_compile_options(ToyInfer PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>)
         endif()
     endif()
 endif()

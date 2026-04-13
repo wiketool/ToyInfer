@@ -43,3 +43,22 @@ echo "ncu --kill yes --launch-count 30 --target-processes all \
 ncu --kill yes --launch-count 30 --target-processes all \
   --metrics sm__cycles_elapsed.avg,smsp__cycles_elapsed.avg,gpu__time_duration.sum,sm__throughput.avg.pct_of_peak_sustained_elapsed,smsp__inst_executed.sum,smsp__sass_thread_inst_executed_op_fadd_pred_on.sum,smsp__sass_thread_inst_executed_op_fmul_pred_on.sum,smsp__sass_thread_inst_executed_op_ffma_pred_on.sum,smsp__inst_executed_pipe_tensor.sum \
   -o ncu_flops_pd0_st1_cg0_long $CMD 2>&1 | tee -a $LOG
+
+./build/ToyInfer --model_dir=models/Qwen3-4B   --max_seq_len=40960
+
+LOG=ncu.log
+CMD="./build/ToyInfer --model_dir=models/Qwen3-4B \
+  --max_seq_len=40960 --detail_time=1 \
+  --use_dedicated_prefill=1 \
+  --use_multi_stream=1 \
+  --enable_cuda_graph=0 \
+  --bench=long"
+
+ncu \
+  --kill yes \
+  --launch-count 2 \
+  --target-processes all \
+  --kernel-name "flash_attention_v1_bf16_kernel" \
+  --set full \
+  -f -o ncu_flashattention \
+  $CMD 2>&1 | tee -a $LOG

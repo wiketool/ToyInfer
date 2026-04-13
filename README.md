@@ -17,7 +17,7 @@ ln -s build/compile_commands.json compile_commands.json
 ## Kernel后续优化
 
 - [ ] softmax_f32_kernel分片处理，使用online softmax算法，减少和global memory交互的次数
-- [ ] Flash attention 解决prefill时softmax显存爆炸和memory bottleneck的情况
+- [x] Flash attention 解决prefill时softmax显存爆炸和memory bottleneck的情况
 - [x] cudaStream 优化
 - [x] cudaGraph 优化
 - [x] logits 变为pinned memory，减少copy开销
@@ -39,3 +39,10 @@ ln -s build/compile_commands.json compile_commands.json
 ```
 [perf] prompt_tokens=1371, generated_tokens=7581, total_tokens=8952, inference_time=196.526s, TTFT=196.526s, tokens/s=45.55
 ```
+
+## FlashAttention V1 优化
+- [x] online softmax改为reduce两次实现
+- [x] reg_score * value将warp在head_dim上切分，对于同一warp的线程，改为连续访问；而不是原来的stride
+- [x] 对key的访问增加swizzle减轻bank conflict
+- [ ] 将key value改为bfloatx2，使用向量化加载消除2-way bank conflict
+
