@@ -256,7 +256,6 @@ __global__ void flash_attention_v1_bf16_kernel(
     const uint32_t num_warps = blockDim.x / 32;
     // head dim slice分片
     const uint32_t slice_size = HEAD_DIM / Bc;
-    const uint32_t dim_start = tx * slice_size;
     //
     const uint32_t head_idx = blockIdx.x;
     const uint32_t kv_head_idx = head_idx / (num_q_heads / num_kv_heads);
@@ -323,8 +322,8 @@ __global__ void flash_attention_v1_bf16_kernel(
         }
         __syncthreads();
         if (warp_id == 0) {
-            reg_max =
-                lane_id < num_warps ? s_warp_max[q_tile][lane_id] : -CUDART_INF_F;
+            reg_max = lane_id < num_warps ? s_warp_max[q_tile][lane_id]
+                                          : -CUDART_INF_F;
             reg_max = reduce_max_f32_warp(reg_max);
             reg_sum = lane_id < num_warps ? s_warp_sum[q_tile][lane_id] : 0.0f;
             reg_sum = reduce_sum_f32_warp(reg_sum);
@@ -349,7 +348,7 @@ __global__ void flash_attention_v1_bf16_kernel(
         for (uint32_t v_tile = 0; v_tile < Bc; v_tile++) {
             reg_score = s_score[q_tile][v_tile];
             for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
-                const uint32_t dim_idx = dim_slice + dim_start;
+                const uint32_t dim_idx = tx + dim_slice * blockDim.x;
                 reg_d[dim_slice] +=
                     __bfloat162float(s_V[v_tile][dim_idx]) * reg_score;
             }
@@ -360,7 +359,7 @@ __global__ void flash_attention_v1_bf16_kernel(
             s_l[q_tile] = expf(reg_delta) * s_l[q_tile] + reg_sum;
         }
         for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
-            const uint32_t dim_idx = dim_slice + dim_start;
+            const uint32_t dim_idx = tx + dim_slice * blockDim.x;
             s_O[q_tile][dim_idx] =
                 expf(reg_delta) * s_O[q_tile][dim_idx] + reg_d[dim_slice];
         }
@@ -368,7 +367,7 @@ __global__ void flash_attention_v1_bf16_kernel(
     }
     if (q_idx < seq_len) {
         for (uint32_t dim_slice = 0; dim_slice < slice_size; dim_slice++) {
-            const uint32_t dim_idx = dim_slice + dim_start;
+            const uint32_t dim_idx = tx + dim_slice * blockDim.x;
             Os[q_offset + dim_idx] =
                 __float2bfloat16(s_O[q_tile][dim_idx] / s_l[q_tile]);
         }
